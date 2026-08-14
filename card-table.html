@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Card Table Scorepad</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400;6..96,600&family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#16233A;
+    --ink-2:#1E2F4B;
+    --card:#F7F3E8;
+    --card-2:#EDE7D6;
+    --crimson:#B0202F;
+    --brass:#C9A227;
+    --slate:#5C6B7A;
+    --line:rgba(22,35,58,.14);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--ink);
+    background-image:radial-gradient(circle at 50% -10%, #24365A 0%, transparent 60%);
+    color:var(--card);
+    font-family:'DM Sans',system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding:24px 16px 64px;
+  }
+  .wrap{max-width:760px;margin:0 auto}
+
+  /* Header */
+  header{text-align:center;margin-bottom:20px}
+  h1{
+    font-family:'Bodoni Moda',serif;
+    font-weight:600;
+    font-size:clamp(32px,8vw,52px);
+    letter-spacing:.02em;
+    margin:0;
+    line-height:1;
+  }
+  .suits{color:var(--brass);letter-spacing:.5em;font-size:13px;margin-top:10px}
+  .suits .red{color:var(--crimson)}
+  .tag{color:var(--slate);font-size:13px;margin-top:6px;letter-spacing:.08em;text-transform:uppercase}
+
+  /* Tabs */
+  .tabs{display:flex;gap:8px;justify-content:center;margin-top:18px}
+  .tab{
+    font-family:'DM Sans',sans-serif;font-weight:700;font-size:13px;
+    letter-spacing:.04em;padding:9px 18px;border-radius:999px;
+    border:1px solid rgba(247,243,232,.25);background:transparent;color:var(--card);
+    cursor:pointer;
+  }
+  .tab.active{background:var(--brass);border-color:var(--brass);color:var(--ink)}
+  .tab:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+
+  /* Panels */
+  .panel{
+    background:var(--card);
+    color:var(--ink);
+    border-radius:10px;
+    padding:18px;
+    margin-bottom:18px;
+    box-shadow:0 10px 30px rgba(0,0,0,.35);
+  }
+  .panel h2{
+    font-family:'DM Sans',sans-serif;
+    font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--slate);margin:0 0 14px;font-weight:700;
+  }
+  .subtitle{
+    font-family:'Bodoni Moda',serif;font-size:22px;margin:0 0 4px;color:var(--ink);
+  }
+
+  /* Standings strip */
+  .standings{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px}
+  .chip{
+    flex:0 0 auto;min-width:104px;
+    background:var(--card);color:var(--ink);
+    border-radius:8px;padding:12px 14px;
+    border:2px solid transparent;
+    position:relative;
+  }
+  .chip.leader{border-color:var(--brass);background:#FFFBEF}
+  .chip .rank{
+    font-family:'JetBrains Mono',monospace;font-size:10px;
+    color:var(--slate);letter-spacing:.1em;
+  }
+  .chip .who{font-weight:700;font-size:15px;margin:2px 0 6px;word-break:break-word}
+  .chip .tot{font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;line-height:1}
+  .chip.leader .tot{color:var(--brass)}
+  .chip .crown{position:absolute;top:-9px;right:8px;font-size:14px}
+
+  /* Inputs */
+  label{display:block;font-size:12px;color:var(--slate);margin-bottom:5px;font-weight:500}
+  input[type=text],input[type=number],select{
+    width:100%;padding:11px 12px;
+    border:1px solid var(--line);border-radius:7px;
+    background:#fff;color:var(--ink);
+    font-family:'DM Sans',sans-serif;font-size:16px;
+  }
+  input[type=number]{font-family:'JetBrains Mono',monospace;text-align:right;font-weight:700}
+  input:focus,select:focus{outline:2px solid var(--ink);outline-offset:1px}
+  .row{display:flex;gap:8px}
+  .row input{flex:1}
+  .field{margin-bottom:14px}
+  .field:last-child{margin-bottom:0}
+  .checkline{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2)}
+  .checkline input{width:16px;height:16px}
+
+  button{
+    font-family:'DM Sans',sans-serif;font-weight:700;font-size:14px;
+    border:0;border-radius:7px;padding:11px 16px;cursor:pointer;
+    background:var(--ink);color:var(--card);
+  }
+  button:hover{background:var(--ink-2)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+  .ghost{background:transparent;color:var(--slate);border:1px solid var(--line)}
+  .ghost:hover{background:var(--card-2);color:var(--ink)}
+  .danger{background:var(--crimson)}
+  .danger:hover{background:#8E1926}
+  .wide{width:100%;margin-top:12px}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+
+  /* Player setup list */
+  .plist{list-style:none;padding:0;margin:12px 0 0}
+  .plist li{
+    display:flex;align-items:center;gap:10px;
+    padding:9px 0;border-bottom:1px solid var(--line);
+  }
+  .plist li:last-child{border-bottom:0}
+  .seat{
+    font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--slate);
+    width:26px;flex:0 0 26px;
+  }
+  .plist .nm{flex:1;font-weight:500}
+  .x{background:none;border:0;color:var(--crimson);font-size:18px;cursor:pointer;padding:2px 6px}
+
+  /* Round entry sequence */
+  .seq-progress{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--slate);margin-bottom:4px}
+  .round-meta{font-size:12px;color:var(--slate);margin-bottom:14px}
+  .round-meta b{color:var(--ink)}
+  .now{font-family:'Bodoni Moda',serif;font-size:30px;margin:0 0 6px;line-height:1.1}
+  .phase-label{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--brass);font-weight:700;margin-bottom:2px}
+  .hint-line{font-size:12px;color:var(--crimson);margin-top:6px;min-height:16px}
+  .forced-note{font-size:13px;color:var(--ink-2);background:var(--card-2);padding:9px 11px;border-radius:7px}
+  .pending{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+  .pill{
+    font-family:'JetBrains Mono',monospace;font-size:11px;
+    padding:5px 9px;border-radius:20px;background:var(--card-2);color:var(--slate);
+  }
+  .pill.done{background:var(--ink);color:var(--card)}
+
+  /* History table */
+  .scroll{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-family:'JetBrains Mono',monospace;font-size:13px}
+  th,td{padding:9px 8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left;color:var(--slate);font-size:11px}
+  thead th{
+    font-family:'DM Sans',sans-serif;font-size:12px;font-weight:700;
+    color:var(--ink);border-bottom:2px solid var(--ink);
+  }
+  tbody td.cell{cursor:pointer;border-radius:4px}
+  tbody td.cell:hover{background:var(--card-2)}
+  tbody td.cell:focus-visible{outline:2px solid var(--brass)}
+  .score-sub{display:block;font-size:10px;color:var(--slate);font-weight:400}
+  tfoot td{
+    border-top:2px solid var(--ink);border-bottom:0;
+    font-weight:700;font-size:16px;padding-top:11px;
+  }
+  tfoot td.best{color:var(--brass)}
+  .hint{font-size:12px;color:var(--slate);margin-top:10px}
+  .empty{color:var(--slate);font-size:14px;text-align:center;padding:18px 0}
+  .foot{text-align:center;color:var(--slate);font-size:12px;margin-top:22px}
+  .hide{display:none!important}
+  .banner{
+    background:var(--brass);color:var(--ink);border-radius:8px;
+    padding:12px 14px;font-weight:700;text-align:center;margin-bottom:14px;
+  }
+
+  /* Rules accordion */
+  details{border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-top:14px}
+  summary{cursor:pointer;font-weight:700;font-size:13px;color:var(--ink-2)}
+  details[open] summary{margin-bottom:8px}
+  .rules p{font-size:13px;line-height:1.55;color:var(--ink-2);margin:8px 0}
+  .rules ul{margin:8px 0;padding-left:18px}
+  .rules li{font-size:13px;line-height:1.55;color:var(--ink-2);margin-bottom:6px}
+  .rules b{color:var(--ink)}
+
+  @media (prefers-reduced-motion:no-preference){
+    .panel{animation:rise .3s ease both}
+    @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Card Table</h1>
+    <div class="suits"><span>&spades;</span><span class="red">&hearts;</span><span>&clubs;</span><span class="red">&diams;</span></div>
+    <div class="tag" id="tagline">Pick a game to score</div>
+    <div class="tabs">
+      <button class="tab" id="tabDeclare">Declare</button>
+      <button class="tab" id="tabJudgement">Judgement</button>
+    </div>
+  </header>
+
+  <!-- ============ DECLARE APP ============ -->
+  <div id="declareApp">
+
+    <section class="panel" id="setup">
+      <p class="subtitle">Declare</p>
+      <h2>Players</h2>
+      <div class="row">
+        <input type="text" id="nameInput" placeholder="Add a player name" autocomplete="off">
+        <button id="addBtn">Add</button>
+      </div>
+      <ul class="plist" id="playerList"></ul>
+      <button class="wide" id="startBtn" disabled>Start game</button>
+    </section>
+
+    <section class="panel hide" id="standingsPanel" style="background:var(--ink-2)">
+      <h2 style="color:rgba(247,243,232,.55)">Standings</h2>
+      <div class="standings" id="standings"></div>
+    </section>
+
+    <section class="panel hide" id="entryPanel">
+      <h2>Round entry</h2>
+      <div class="seq-progress" id="seqProgress"></div>
+      <p class="now" id="nowName"></p>
+      <label for="scoreInput">Points this round</label>
+      <div class="row">
+        <input type="number" id="scoreInput" inputmode="numeric" placeholder="0">
+        <button id="nextBtn">Enter</button>
+      </div>
+      <div class="pending" id="pending"></div>
+      <div class="actions">
+        <button class="ghost" id="cancelRoundBtn">Cancel round</button>
+      </div>
+    </section>
+
+    <section class="panel hide" id="sheetPanel">
+      <h2>Scoresheet</h2>
+      <div class="scroll"><table id="sheet"></table></div>
+      <p class="hint">Tap any score in the table to edit it. Lowest total wins.</p>
+      <div class="actions">
+        <button id="newRoundBtn">New round</button>
+        <button class="ghost" id="undoBtn">Delete last round</button>
+        <button class="danger" id="resetBtn">Reset game</button>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- ============ JUDGEMENT APP ============ -->
+  <div id="judgementApp">
+
+    <section class="panel" id="jsetup">
+      <p class="subtitle">Judgement</p>
+      <h2>Players</h2>
+      <div class="row">
+        <input type="text" id="jNameInput" placeholder="Add a player name" autocomplete="off">
+        <button id="jAddBtn">Add</button>
+      </div>
+      <ul class="plist" id="jPlayerList"></ul>
+
+      <div class="field" style="margin-top:16px">
+        <label for="jMaxCards">Highest cards per hand</label>
+        <input type="number" id="jMaxCards" min="1" max="13">
+      </div>
+
+      <div class="field">
+        <label for="jSystem">Scoring system</label>
+        <select id="jSystem">
+          <option value="standard">Standard: 10 + bid if exact, else 0</option>
+          <option value="multiplier">Multiplier: 10 × bid if exact, else 0</option>
+          <option value="penalty">Penalty: 10 + bid if exact, else -10 × miss</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label class="checkline"><input type="checkbox" id="jNilBonus" checked> Nil bids score ±10 (bid 0, win 0 = +10; bid 0, win any = -10)</label>
+      </div>
+
+      <button class="wide" id="jStartBtn" disabled>Start game</button>
+
+      <details>
+        <summary>Rules of Judgement</summary>
+        <div class="rules">
+          <p>Judgement (also called Call Break or Oh Hell) is a trick-taking game for 3 to 7 players using a standard 52-card deck. The number of cards dealt drops by one each round until a single card is dealt, then climbs back up.</p>
+          <ul>
+            <li><b>Bidding.</b> After the deal, every player calls the exact number of tricks they expect to win. The dealer bids last and is not allowed to name a number that would make every bid at the table add up to the total cards dealt, so at least one player is guaranteed to miss.</li>
+            <li><b>Trump.</b> A trump suit governs the round, typically rotating through Spades, Hearts, Diamonds and Clubs. Any trump beats every card outside that suit.</li>
+            <li><b>Play.</b> Players must follow the suit led when they can. A player with none of that suit may trump in or discard freely. The trick goes to the highest card of the suit led, unless a trump was played, in which case the highest trump takes it.</li>
+            <li><b>Objective.</b> Winning tricks is not enough on its own. Only landing the exact number called earns points; going over or under costs you.</li>
+          </ul>
+          <p>Pick a scoring system above before the game starts. All three reward an exact bid; they differ in how a miss, and a bid of nil, are treated.</p>
+        </div>
+      </details>
+    </section>
+
+    <div class="banner hide" id="jFinishedBanner"></div>
+
+    <section class="panel hide" id="jStandingsPanel" style="background:var(--ink-2)">
+      <h2 style="color:rgba(247,243,232,.55)">Standings</h2>
+      <div class="standings" id="jStandings"></div>
+    </section>
+
+    <section class="panel hide" id="jEntryPanel">
+      <h2>Round entry</h2>
+      <div class="seq-progress" id="jSeqProgress"></div>
+      <div class="round-meta" id="jRoundMeta"></div>
+      <p class="phase-label" id="jPhaseLabel"></p>
+      <p class="now" id="jNowName"></p>
+
+      <div id="jBidBox">
+        <label for="jBidInput">Bid (tricks called)</label>
+        <div class="row">
+          <input type="number" id="jBidInput" inputmode="numeric" min="0" placeholder="0">
+          <button id="jBidNextBtn">Enter</button>
+        </div>
+        <div class="hint-line" id="jBidHint"></div>
+      </div>
+
+      <div id="jTrickBox" class="hide">
+        <label for="jTrickInput">Tricks won</label>
+        <div class="row">
+          <input type="number" id="jTrickInput" inputmode="numeric" min="0" placeholder="0">
+          <button id="jTrickNextBtn">Enter</button>
+        </div>
+        <div class="forced-note hide" id="jForcedNote"></div>
+      </div>
+
+      <div class="pending" id="jPending"></div>
+      <div class="actions">
+        <button class="ghost" id="jCancelRoundBtn">Cancel round</button>
+      </div>
+    </section>
+
+    <section class="panel hide" id="jSheetPanel">
+      <h2>Scoresheet</h2>
+      <div class="scroll"><table id="jSheet"></table></div>
+      <p class="hint">Each cell shows bid / won, with the round score below. Tap a cell to edit. Highest total wins.</p>
+      <div class="actions">
+        <button id="jNewRoundBtn">New round</button>
+        <button class="ghost" id="jUndoBtn">Delete last round</button>
+        <button class="danger" id="jResetBtn">Reset game</button>
+      </div>
+    </section>
+
+  </div>
+
+  <p class="foot">Saved on this device automatically.</p>
+</div>
+
+<script>
+/* ============================================================
+   Shared storage helper
+   ============================================================ */
+const store = {
+  async save(key, s){
+    const v = JSON.stringify(s);
+    try{ if(window.storage){ await window.storage.set(key, v); return; } }catch(e){}
+    try{ localStorage.setItem(key, v); }catch(e){}
+  },
+  async load(key){
+    try{ if(window.storage){ const r = await window.storage.get(key); if(r && r.value) return JSON.parse(r.value); } }catch(e){}
+    try{ const v = localStorage.getItem(key); if(v) return JSON.parse(v); }catch(e){}
+    return null;
+  }
+};
+const $ = id => document.getElementById(id);
+
+/* ============================================================
+   TAB SWITCHER
+   ============================================================ */
+const TAB_KEY = 'card-table-active-tab';
+function showTab(tab){
+  $('declareApp').classList.toggle('hide', tab !== 'declare');
+  $('judgementApp').classList.toggle('hide', tab !== 'judgement');
+  $('tabDeclare').classList.toggle('active', tab === 'declare');
+  $('tabJudgement').classList.toggle('active', tab === 'judgement');
+  $('tagline').textContent = tab === 'declare' ? 'Lowest total wins' : 'Exact bids only, highest total wins';
+  localStorage.setItem(TAB_KEY, tab);
+}
+$('tabDeclare').onclick = () => showTab('declare');
+$('tabJudgement').onclick = () => showTab('judgement');
+
+/* ============================================================
+   DECLARE
+   ============================================================ */
+const DKEY = 'declare-scorepad-v1';
+let dstate = { players:[], rounds:[], started:false };
+let dentry = null;
+
+const dtotals = () => dstate.players.map((_,i) =>
+  dstate.rounds.reduce((s,r) => s + (Number(r[i]) || 0), 0));
+
+function dpersist(){ store.save(DKEY, dstate); }
+
+function dRenderSetup(){
+  const ul = $('playerList');
+  ul.innerHTML = '';
+  dstate.players.forEach((p,i) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="seat">${String(i+1).padStart(2,'0')}</span><span class="nm"></span>`;
+    li.querySelector('.nm').textContent = p;
+    const b = document.createElement('button');
+    b.className = 'x'; b.textContent = '\u00d7';
+    b.setAttribute('aria-label','Remove ' + p);
+    b.onclick = () => { dstate.players.splice(i,1); dpersist(); dRenderAll(); };
+    li.appendChild(b);
+    ul.appendChild(li);
+  });
+  $('startBtn').disabled = dstate.players.length < 2;
+  $('startBtn').textContent = dstate.players.length < 2 ? 'Add at least two players' : 'Start game';
+}
+
+function dAddPlayer(){
+  const v = $('nameInput').value.trim();
+  if(!v) return;
+  dstate.players.push(v);
+  $('nameInput').value = '';
+  $('nameInput').focus();
+  dpersist(); dRenderAll();
+}
+$('addBtn').onclick = dAddPlayer;
+$('nameInput').addEventListener('keydown', e => { if(e.key === 'Enter') dAddPlayer(); });
+
+$('startBtn').onclick = () => { dstate.started = true; dpersist(); dRenderAll(); dStartRound(); };
+
+function dRenderStandings(){
+  const t = dtotals();
+  const order = dstate.players.map((n,i) => ({n, t:t[i]})).sort((a,b) => a.t - b.t);
+  const best = order.length ? order[0].t : 0;
+  const el = $('standings');
+  el.innerHTML = '';
+  order.forEach((p,i) => {
+    const d = document.createElement('div');
+    const lead = dstate.rounds.length > 0 && p.t === best;
+    d.className = 'chip' + (lead ? ' leader' : '');
+    d.innerHTML = `${lead ? '<span class="crown">&#9819;</span>' : ''}
+      <div class="rank">${String(i+1).padStart(2,'0')}</div>
+      <div class="who"></div>
+      <div class="tot">${p.t}</div>`;
+    d.querySelector('.who').textContent = p.n;
+    el.appendChild(d);
+  });
+}
+
+function dStartRound(editIndex){
+  dentry = {
+    values: editIndex != null ? dstate.rounds[editIndex].slice() : dstate.players.map(() => null),
+    idx: 0,
+    editingRound: editIndex != null ? editIndex : null
+  };
+  dRenderEntry();
+}
+
+function dRenderEntry(){
+  if(!dentry){ $('entryPanel').classList.add('hide'); return; }
+  $('entryPanel').classList.remove('hide');
+  const label = dentry.editingRound != null
+    ? 'Editing round ' + (dentry.editingRound + 1)
+    : 'Round ' + (dstate.rounds.length + 1);
+  $('seqProgress').textContent = label + '  \u00b7  player ' + (dentry.idx + 1) + ' of ' + dstate.players.length;
+  $('nowName').textContent = dstate.players[dentry.idx];
+  const cur = dentry.values[dentry.idx];
+  $('scoreInput').value = cur == null ? '' : cur;
+  const pend = $('pending');
+  pend.innerHTML = '';
+  dstate.players.forEach((p,i) => {
+    const s = document.createElement('span');
+    s.className = 'pill' + (dentry.values[i] != null ? ' done' : '');
+    s.textContent = p + (dentry.values[i] != null ? ' ' + dentry.values[i] : '');
+    s.onclick = () => { dentry.idx = i; dRenderEntry(); };
+    pend.appendChild(s);
+  });
+  $('nextBtn').textContent = dentry.idx === dstate.players.length - 1 ? 'Save round' : 'Enter';
+  $('scoreInput').focus();
+  $('scoreInput').select();
+}
+
+function dSubmitScore(){
+  const raw = $('scoreInput').value.trim();
+  dentry.values[dentry.idx] = raw === '' ? 0 : Number(raw);
+  if(dentry.idx < dstate.players.length - 1){ dentry.idx++; dRenderEntry(); return; }
+  if(dentry.editingRound != null) dstate.rounds[dentry.editingRound] = dentry.values.slice();
+  else dstate.rounds.push(dentry.values.slice());
+  dentry = null;
+  dpersist(); dRenderAll();
+}
+$('nextBtn').onclick = dSubmitScore;
+$('scoreInput').addEventListener('keydown', e => { if(e.key === 'Enter') dSubmitScore(); });
+$('cancelRoundBtn').onclick = () => { dentry = null; dRenderAll(); };
+
+function dRenderSheet(){
+  const t = dtotals();
+  const best = t.length ? Math.min(...t) : 0;
+  const tb = $('sheet');
+  tb.innerHTML = '';
+
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  hr.appendChild(Object.assign(document.createElement('th'), {textContent:'Round'}));
+  dstate.players.forEach(p => { const th = document.createElement('th'); th.textContent = p; hr.appendChild(th); });
+  thead.appendChild(hr); tb.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  if(dstate.rounds.length === 0){
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = dstate.players.length + 1;
+    td.className = 'empty';
+    td.textContent = 'No rounds yet. Start with New round.';
+    tr.appendChild(td); tbody.appendChild(tr);
+  }
+  dstate.rounds.forEach((r,ri) => {
+    const tr = document.createElement('tr');
+    const rl = document.createElement('td'); rl.textContent = 'R' + (ri+1); tr.appendChild(rl);
+    r.forEach((v,pi) => {
+      const td = document.createElement('td');
+      td.className = 'cell'; td.tabIndex = 0; td.textContent = v;
+      const edit = () => dEditCell(ri, pi, td);
+      td.onclick = edit;
+      td.onkeydown = e => { if(e.key === 'Enter') edit(); };
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  tb.appendChild(tbody);
+
+  const tfoot = document.createElement('tfoot');
+  const fr = document.createElement('tr');
+  fr.appendChild(Object.assign(document.createElement('td'), {textContent:'Total'}));
+  t.forEach(v => {
+    const td = document.createElement('td');
+    td.textContent = v;
+    if(dstate.rounds.length && v === best) td.className = 'best';
+    fr.appendChild(td);
+  });
+  tfoot.appendChild(fr); tb.appendChild(tfoot);
+}
+
+function dEditCell(ri, pi, td){
+  const inp = document.createElement('input');
+  inp.type = 'number'; inp.value = dstate.rounds[ri][pi];
+  inp.style.width = '76px'; inp.style.padding = '4px 6px';
+  td.textContent = ''; td.appendChild(inp); inp.focus(); inp.select();
+  const commit = () => {
+    const raw = inp.value.trim();
+    dstate.rounds[ri][pi] = raw === '' ? 0 : Number(raw);
+    dpersist(); dRenderAll();
+  };
+  inp.onblur = commit;
+  inp.onkeydown = e => { if(e.key === 'Enter') commit(); if(e.key === 'Escape') dRenderAll(); };
+}
+
+$('newRoundBtn').onclick = () => dStartRound();
+$('undoBtn').onclick = () => {
+  if(!dstate.rounds.length) return;
+  if(confirm('Delete the last round?')){ dstate.rounds.pop(); dpersist(); dRenderAll(); }
+};
+$('resetBtn').onclick = () => {
+  if(confirm('Reset everything, including player names?')){
+    dstate = { players:[], rounds:[], started:false };
+    dentry = null; dpersist(); dRenderAll();
+  }
+};
+
+function dRenderAll(){
+  const playing = dstate.started && dstate.players.length >= 2;
+  $('setup').classList.toggle('hide', playing);
+  $('standingsPanel').classList.toggle('hide', !playing);
+  $('sheetPanel').classList.toggle('hide', !playing || !!dentry);
+  dRenderSetup();
+  if(playing){ dRenderStandings(); dRenderSheet(); }
+  dRenderEntry();
+}
+
+/* ============================================================
+   JUDGEMENT
+   ============================================================ */
+const JKEY = 'judgement-scorepad-v1';
+const SUITS = [
+  {name:'Spades', sym:'&spades;', red:false},
+  {name:'Hearts', sym:'&hearts;', red:true},
+  {name:'Diamonds', sym:'&diams;', red:true},
+  {name:'Clubs', sym:'&clubs;', red:false}
+];
+let jstate = { players:[], maxCards:null, system:'standard', nilBonus:true, roundsPlan:[], rounds:[], started:false };
+let jentry = null; // {phase:'bid'|'tricks', order:[playerIdx...], idx, bids:[], tricks:[], roundIdx, editingRound}
+
+function jpersist(){ store.save(JKEY, jstate); }
+
+function suggestedMaxCards(n){
+  if(n < 1) return 7;
+  return Math.max(1, Math.min(10, Math.floor(52 / n)));
+}
+
+function jRenderSetup(){
+  const ul = $('jPlayerList');
+  ul.innerHTML = '';
+  jstate.players.forEach((p,i) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="seat">${String(i+1).padStart(2,'0')}</span><span class="nm"></span>`;
+    li.querySelector('.nm').textContent = p;
+    const b = document.createElement('button');
+    b.className = 'x'; b.textContent = '\u00d7';
+    b.setAttribute('aria-label','Remove ' + p);
+    b.onclick = () => {
+      jstate.players.splice(i,1);
+      if(!jstate.maxCardsTouched) $('jMaxCards').value = suggestedMaxCards(jstate.players.length);
+      jpersist(); jRenderAll();
+    };
+    li.appendChild(b);
+    ul.appendChild(li);
+  });
+  if(!$('jMaxCards').value){ $('jMaxCards').value = suggestedMaxCards(jstate.players.length); }
+  $('jSystem').value = jstate.system;
+  $('jNilBonus').checked = jstate.nilBonus;
+  $('jStartBtn').disabled = jstate.players.length < 3;
+  $('jStartBtn').textContent = jstate.players.length < 3 ? 'Add at least three players' : 'Start game';
+}
+
+function jAddPlayer(){
+  const v = $('jNameInput').value.trim();
+  if(!v) return;
+  jstate.players.push(v);
+  $('jNameInput').value = '';
+  $('jNameInput').focus();
+  if(!jstate.maxCardsTouched) $('jMaxCards').value = suggestedMaxCards(jstate.players.length);
+  jpersist(); jRenderAll();
+}
+$('jAddBtn').onclick = jAddPlayer;
+$('jNameInput').addEventListener('keydown', e => { if(e.key === 'Enter') jAddPlayer(); });
+$('jMaxCards').addEventListener('input', () => { jstate.maxCardsTouched = true; });
+
+function buildRoundsPlan(max){
+  const down = []; for(let i=max;i>=1;i--) down.push(i);
+  const up = []; for(let i=2;i<=max;i++) up.push(i);
+  return down.concat(up);
+}
+
+$('jStartBtn').onclick = () => {
+  const max = Math.max(1, Number($('jMaxCards').value) || suggestedMaxCards(jstate.players.length));
+  jstate.maxCards = max;
+  jstate.system = $('jSystem').value;
+  jstate.nilBonus = $('jNilBonus').checked;
+  jstate.roundsPlan = buildRoundsPlan(max);
+  jstate.started = true;
+  jpersist(); jRenderAll(); jStartRound();
+};
+
+function jCalcScore(bid, won){
+  if(jstate.nilBonus && bid === 0) return won === 0 ? 10 : -10;
+  const exact = bid === won;
+  if(jstate.system === 'standard') return exact ? 10 + bid : 0;
+  if(jstate.system === 'multiplier') return exact ? 10 * bid : 0;
+  if(jstate.system === 'penalty') return exact ? 10 + bid : -10 * Math.abs(bid - won);
+  return 0;
+}
+
+function jTotals(){
+  return jstate.players.map((_,i) => jstate.rounds.reduce((s,r) => s + (Number(r.scores[i]) || 0), 0));
+}
+
+function jRenderStandings(){
+  const t = jTotals();
+  const order = jstate.players.map((n,i) => ({n, t:t[i]})).sort((a,b) => b.t - a.t);
+  const best = order.length ? order[0].t : 0;
+  const el = $('jStandings');
+  el.innerHTML = '';
+  order.forEach((p,i) => {
+    const d = document.createElement('div');
+    const lead = jstate.rounds.length > 0 && p.t === best;
+    d.className = 'chip' + (lead ? ' leader' : '');
+    d.innerHTML = `${lead ? '<span class="crown">&#9819;</span>' : ''}
+      <div class="rank">${String(i+1).padStart(2,'0')}</div>
+      <div class="who"></div>
+      <div class="tot">${p.t}</div>`;
+    d.querySelector('.who').textContent = p.n;
+    el.appendChild(d);
+  });
+}
+
+function jGameOver(){ return jstate.rounds.length >= jstate.roundsPlan.length; }
+
+function jStartRound(editIndex){
+  const roundIdx = editIndex != null ? editIndex : jstate.rounds.length;
+  if(editIndex == null && jGameOver()) return;
+  const n = jstate.players.length;
+  const dealer = roundIdx % n;
+  const order = [];
+  for(let i=0;i<n;i++) order.push((dealer + 1 + i) % n); // dealer ends up last
+  const existing = editIndex != null ? jstate.rounds[editIndex] : null;
+  jentry = {
+    phase:'bid',
+    order,
+    idx:0,
+    bids: existing ? existing.bids.slice() : order.map(() => null),
+    tricks: existing ? existing.tricks.slice() : order.map(() => null),
+    roundIdx,
+    editingRound: editIndex != null ? editIndex : null
+  };
+  jRenderEntry();
+}
+
+function jRoundCards(roundIdx){ return jstate.roundsPlan[roundIdx]; }
+function jRoundSuit(roundIdx){ return SUITS[roundIdx % 4]; }
+function jRoundDealer(roundIdx){ return roundIdx % jstate.players.length; }
+
+function jRenderEntry(){
+  if(!jentry){ $('jEntryPanel').classList.add('hide'); return; }
+  $('jEntryPanel').classList.remove('hide');
+  const cards = jRoundCards(jentry.roundIdx);
+  const suit = jRoundSuit(jentry.roundIdx);
+  const dealerIdx = jRoundDealer(jentry.roundIdx);
+
+  const label = jentry.editingRound != null
+    ? 'Editing round ' + (jentry.roundIdx + 1)
+    : 'Round ' + (jentry.roundIdx + 1) + ' of ' + jstate.roundsPlan.length;
+  $('jSeqProgress').textContent = label;
+  $('jRoundMeta').innerHTML = '<b>' + cards + '</b> card' + (cards === 1 ? '' : 's') + '  \u00b7  trump <b>' + suit.sym + ' ' + suit.name + '</b>  \u00b7  dealer <b></b>';
+  $('jRoundMeta').querySelector('b:last-child').textContent = jstate.players[dealerIdx];
+
+  const playerIdx = jentry.order[jentry.idx];
+  const isDealer = playerIdx === dealerIdx;
+  const isLastInPhase = jentry.idx === jentry.order.length - 1;
+
+  if(jentry.phase === 'bid'){
+    $('jBidBox').classList.remove('hide');
+    $('jTrickBox').classList.add('hide');
+    $('jPhaseLabel').textContent = 'Bidding';
+    $('jNowName').textContent = jstate.players[playerIdx] + (isDealer ? ' (dealer)' : '');
+    const cur = jentry.bids[jentry.idx];
+    $('jBidInput').value = cur == null ? '' : cur;
+    $('jBidInput').max = cards;
+    let hint = '';
+    if(isDealer && isLastInPhase){
+      const priorSum = jentry.bids.slice(0, jentry.idx).reduce((s,v) => s + (Number(v)||0), 0);
+      const forbidden = cards - priorSum;
+      if(forbidden >= 0 && forbidden <= cards) hint = 'As dealer, cannot bid ' + forbidden + ' (would make all bids total ' + cards + ')';
+    }
+    $('jBidHint').textContent = hint;
+    $('jBidInput').focus(); $('jBidInput').select();
+  } else {
+    $('jBidBox').classList.add('hide');
+    $('jTrickBox').classList.remove('hide');
+    $('jPhaseLabel').textContent = 'Tricks won';
+    $('jNowName').textContent = jstate.players[playerIdx];
+    const cur = jentry.tricks[jentry.idx];
+    if(isLastInPhase){
+      const priorSum = jentry.tricks.slice(0, jentry.idx).reduce((s,v) => s + (Number(v)||0), 0);
+      const remainder = Math.max(0, cards - priorSum);
+      jentry.tricks[jentry.idx] = remainder;
+      $('jTrickInput').classList.add('hide');
+      $('jForcedNote').classList.remove('hide');
+      $('jForcedNote').textContent = jstate.players[playerIdx] + ' takes the remaining ' + remainder + ' trick' + (remainder === 1 ? '' : 's') + '.';
+    } else {
+      $('jTrickInput').classList.remove('hide');
+      $('jForcedNote').classList.add('hide');
+      $('jTrickInput').value = cur == null ? '' : cur;
+      $('jTrickInput').max = cards;
+      $('jTrickInput').focus(); $('jTrickInput').select();
+    }
+  }
+
+  const pend = $('jPending');
+  pend.innerHTML = '';
+  jentry.order.forEach((pi,i) => {
+    const s = document.createElement('span');
+    const v = jentry.phase === 'bid' ? jentry.bids[i] : jentry.tricks[i];
+    const done = jentry.phase === 'bid' ? jentry.bids[i] != null : jentry.tricks[i] != null;
+    s.className = 'pill' + (done ? ' done' : '');
+    s.textContent = jstate.players[pi] + (done ? ' ' + v : '');
+    s.onclick = () => { jentry.idx = i; jRenderEntry(); };
+    pend.appendChild(s);
+  });
+
+  $('jBidNextBtn').textContent = isLastInPhase ? 'Start tricks' : 'Enter';
+  $('jTrickNextBtn').textContent = isLastInPhase ? 'Save round' : 'Enter';
+}
+
+function jSubmitBid(){
+  const cards = jRoundCards(jentry.roundIdx);
+  const dealerIdx = jRoundDealer(jentry.roundIdx);
+  const playerIdx = jentry.order[jentry.idx];
+  const isDealer = playerIdx === dealerIdx;
+  const isLastInPhase = jentry.idx === jentry.order.length - 1;
+  const raw = $('jBidInput').value.trim();
+  let val = raw === '' ? 0 : Number(raw);
+  val = Math.max(0, Math.min(cards, val));
+
+  if(isDealer && isLastInPhase){
+    const priorSum = jentry.bids.slice(0, jentry.idx).reduce((s,v) => s + (Number(v)||0), 0);
+    const forbidden = cards - priorSum;
+    if(val === forbidden){
+      $('jBidHint').textContent = 'Cannot bid ' + forbidden + ', pick a different number.';
+      return;
+    }
+  }
+
+  jentry.bids[jentry.idx] = val;
+  if(!isLastInPhase){ jentry.idx++; jRenderEntry(); return; }
+  jentry.phase = 'tricks'; jentry.idx = 0; jRenderEntry();
+}
+$('jBidNextBtn').onclick = jSubmitBid;
+$('jBidInput').addEventListener('keydown', e => { if(e.key === 'Enter') jSubmitBid(); });
+
+function jSubmitTrick(){
+  const cards = jRoundCards(jentry.roundIdx);
+  const isLastInPhase = jentry.idx === jentry.order.length - 1;
+  if(!isLastInPhase){
+    const raw = $('jTrickInput').value.trim();
+    let val = raw === '' ? 0 : Number(raw);
+    val = Math.max(0, Math.min(cards, val));
+    jentry.tricks[jentry.idx] = val;
+    jentry.idx++; jRenderEntry(); return;
+  }
+  // last player's tricks were already auto-filled in jRenderEntry
+  const scores = jentry.order.map((pi,i) => jCalcScore(Number(jentry.bids[i]), Number(jentry.tricks[i])));
+  const round = {
+    cards, dealer: jRoundDealer(jentry.roundIdx),
+    order: jentry.order.slice(),
+    bids: jentry.bids.slice(), tricks: jentry.tricks.slice(), scores
+  };
+  // scores/bids/tricks are stored in "order" sequence; expand to per-player-index arrays for easy table rendering
+  const byPlayer = { bids:[], tricks:[], scores:[] };
+  jstate.players.forEach((_,pi) => {
+    const pos = jentry.order.indexOf(pi);
+    byPlayer.bids[pi] = round.bids[pos];
+    byPlayer.tricks[pi] = round.tricks[pos];
+    byPlayer.scores[pi] = round.scores[pos];
+  });
+  const roundRecord = { cards: round.cards, dealer: round.dealer, bids: byPlayer.bids, tricks: byPlayer.tricks, scores: byPlayer.scores };
+
+  if(jentry.editingRound != null) jstate.rounds[jentry.editingRound] = roundRecord;
+  else jstate.rounds.push(roundRecord);
+
+  jentry = null;
+  jpersist(); jRenderAll();
+}
+$('jTrickNextBtn').onclick = jSubmitTrick;
+$('jTrickInput').addEventListener('keydown', e => { if(e.key === 'Enter') jSubmitTrick(); });
+$('jCancelRoundBtn').onclick = () => { jentry = null; jRenderAll(); };
+
+function jRenderSheet(){
+  const t = jTotals();
+  const best = t.length ? Math.max(...t) : 0;
+  const tb = $('jSheet');
+  tb.innerHTML = '';
+
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  hr.appendChild(Object.assign(document.createElement('th'), {textContent:'Round'}));
+  jstate.players.forEach(p => { const th = document.createElement('th'); th.textContent = p; hr.appendChild(th); });
+  thead.appendChild(hr); tb.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  if(jstate.rounds.length === 0){
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = jstate.players.length + 1;
+    td.className = 'empty';
+    td.textContent = 'No rounds yet. Start with New round.';
+    tr.appendChild(td); tbody.appendChild(tr);
+  }
+  jstate.rounds.forEach((r,ri) => {
+    const tr = document.createElement('tr');
+    const suit = jRoundSuit(ri);
+    const rl = document.createElement('td');
+    rl.innerHTML = 'R' + (ri+1) + '<span class="score-sub">' + r.cards + 'c \u00b7 ' + suit.sym + '</span>';
+    tr.appendChild(rl);
+    jstate.players.forEach((_,pi) => {
+      const td = document.createElement('td');
+      td.className = 'cell'; td.tabIndex = 0;
+      td.innerHTML = r.bids[pi] + ' / ' + r.tricks[pi] + '<span class="score-sub">' + (r.scores[pi] >= 0 ? '+' : '') + r.scores[pi] + '</span>';
+      const edit = () => jEditCell(ri, pi, td);
+      td.onclick = edit;
+      td.onkeydown = e => { if(e.key === 'Enter') edit(); };
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  tb.appendChild(tbody);
+
+  const tfoot = document.createElement('tfoot');
+  const fr = document.createElement('tr');
+  fr.appendChild(Object.assign(document.createElement('td'), {textContent:'Total'}));
+  t.forEach(v => {
+    const td = document.createElement('td');
+    td.textContent = v;
+    if(jstate.rounds.length && v === best) td.className = 'best';
+    fr.appendChild(td);
+  });
+  tfoot.appendChild(fr); tb.appendChild(tfoot);
+}
+
+function jEditCell(ri, pi, td){
+  const r = jstate.rounds[ri];
+  td.innerHTML = '';
+  const bidInp = document.createElement('input');
+  bidInp.type = 'number'; bidInp.value = r.bids[pi];
+  bidInp.style.width = '48px'; bidInp.style.padding = '3px 4px'; bidInp.style.marginRight = '3px';
+  const trickInp = document.createElement('input');
+  trickInp.type = 'number'; trickInp.value = r.tricks[pi];
+  trickInp.style.width = '48px'; trickInp.style.padding = '3px 4px';
+  td.appendChild(bidInp); td.appendChild(trickInp);
+  bidInp.focus(); bidInp.select();
+  const commit = () => {
+    const b = Number(bidInp.value) || 0;
+    const w = Number(trickInp.value) || 0;
+    r.bids[pi] = b; r.tricks[pi] = w;
+    r.scores[pi] = jCalcScore(b, w);
+    jpersist(); jRenderAll();
+  };
+  bidInp.onkeydown = e => { if(e.key === 'Enter') trickInp.focus(); if(e.key === 'Escape') jRenderAll(); };
+  trickInp.onkeydown = e => { if(e.key === 'Enter') commit(); if(e.key === 'Escape') jRenderAll(); };
+  trickInp.onblur = () => setTimeout(() => { if(document.activeElement !== bidInp) commit(); }, 120);
+}
+
+$('jNewRoundBtn').onclick = () => jStartRound();
+$('jUndoBtn').onclick = () => {
+  if(!jstate.rounds.length) return;
+  if(confirm('Delete the last round?')){ jstate.rounds.pop(); jpersist(); jRenderAll(); }
+};
+$('jResetBtn').onclick = () => {
+  if(confirm('Reset everything, including player names and settings?')){
+    jstate = { players:[], maxCards:null, system:'standard', nilBonus:true, roundsPlan:[], rounds:[], started:false };
+    jentry = null; jpersist(); jRenderAll();
+  }
+};
+
+function jRenderAll(){
+  const playing = jstate.started && jstate.players.length >= 3;
+  $('jsetup').classList.toggle('hide', playing);
+  $('jStandingsPanel').classList.toggle('hide', !playing);
+  $('jSheetPanel').classList.toggle('hide', !playing || !!jentry);
+  jRenderSetup();
+  const over = playing && jGameOver() && !jentry;
+  $('jFinishedBanner').classList.toggle('hide', !over);
+  $('jNewRoundBtn').classList.toggle('hide', !!over);
+  if(over){
+    const t = jTotals();
+    const best = Math.max(...t);
+    const winners = jstate.players.filter((_,i) => t[i] === best);
+    $('jFinishedBanner').textContent = 'Game complete. Winner: ' + winners.join(', ') + ' with ' + best + ' points.';
+  }
+  if(playing){ jRenderStandings(); jRenderSheet(); }
+  jRenderEntry();
+}
+
+/* ============================================================
+   INIT
+   ============================================================ */
+(async function init(){
+  const [dsaved, jsaved] = await Promise.all([store.load(DKEY), store.load(JKEY)]);
+  if(dsaved && Array.isArray(dsaved.players)) dstate = dsaved;
+  if(jsaved && Array.isArray(jsaved.players)) jstate = jsaved;
+  dRenderAll();
+  jRenderAll();
+  const savedTab = localStorage.getItem(TAB_KEY);
+  showTab(savedTab === 'judgement' ? 'judgement' : 'declare');
+})();
+</script>
+</body>
+</html>
