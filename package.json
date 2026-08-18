@@ -3,13 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "convex dev --start \"next dev\"",
+    "dev:web": "next dev",
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "convex": "^1.44.0",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest"

@@ -27,7 +27,7 @@ function newRoundState(players: readonly PlayerState[], random: RandomSource) {
   };
 }
 
-export function createGame(names: readonly string[], random: RandomSource = Math.random): GameState {
+export function createGame(names: readonly string[], random: RandomSource = Math.random, gameId?: string): GameState {
   const cleaned = names.map((name) => name.trim()).filter(Boolean);
   if (cleaned.length < MIN_PLAYERS || cleaned.length > MAX_PLAYERS) {
     throw new RangeError(`Declare supports ${MIN_PLAYERS} to ${MAX_PLAYERS} players.`);
@@ -37,7 +37,7 @@ export function createGame(names: readonly string[], random: RandomSource = Math
   }));
   const state: GameState = {
     version: 1,
-    id: globalThis.crypto?.randomUUID?.() ?? `game-${Date.now()}`,
+    id: gameId ?? globalThis.crypto?.randomUUID?.() ?? `game-${Date.now()}`,
     playerOrder: players.map((player) => player.id),
     roundNumber: 1,
     rounds: [],
