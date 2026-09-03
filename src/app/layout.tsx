@@ -3,7 +3,7 @@ import "./globals.css";
 import ConvexClientProvider from "./ConvexClientProvider";
 
 export const metadata: Metadata = {
-  title: "Card Table",
+  title: "Card Table · Online Declare",
   description: "Local card-game scorepads and playable games",
 };
 

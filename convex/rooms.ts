@@ -3,7 +3,9 @@ import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/s
 import { createGame, endGame, startNextRound } from "../src/games/declare/engine/actions";
 import type { GameState } from "../src/games/declare/engine/state";
 import { executePlayerCommand, type PlayerCommand } from "../src/games/declare/multiplayer/commands";
-import { createPlayerView } from "../src/games/declare/multiplayer/views";
+import { createPlayerView, type DiscardVisibility } from "../src/games/declare/multiplayer/views";
+
+const discardVisibilityValidator = v.union(v.literal("public"), v.literal("nextPlayerOnly"));
 
 const commandValidator = v.union(
   v.object({ type: v.literal("discard"), cardIds: v.array(v.string()) }),
@@ -30,7 +32,8 @@ function validToken(token: string) {
 }
 
 export const create = mutation({
-  args: { code: v.string(), playerName: v.string(), seatToken: v.string() },
+  args: { code: v.string(), playerName: v.string(), seatToken: v.string(), discardVisibility: discardVisibilityValidator },
+  returns: v.object({ code: v.string(), playerId: v.string() }),
   handler: async (ctx, args) => {
     const code = normalizedCode(args.code);
     const name = validName(args.playerName);
@@ -39,7 +42,8 @@ export const create = mutation({
     if (existing) throw new ConvexError("That room code is already in use.");
     const playerId = "player-1";
     const roomId = await ctx.db.insert("rooms", {
-      code, hostPlayerId: playerId, status: "waiting", revision: 0, createdAt: Date.now(),
+      code, hostPlayerId: playerId, status: "waiting", revision: 0,
+      discardVisibility: args.discardVisibility, createdAt: Date.now(),
     });
     await ctx.db.insert("seats", { roomId, playerId, name, token, joinedAt: Date.now() });
     return { code, playerId };
@@ -48,6 +52,7 @@ export const create = mutation({
 
 export const join = mutation({
   args: { code: v.string(), playerName: v.string(), seatToken: v.string() },
+  returns: v.object({ code: v.string(), playerId: v.string() }),
   handler: async (ctx, args) => {
     const code = normalizedCode(args.code);
     const name = validName(args.playerName);
@@ -55,7 +60,7 @@ export const join = mutation({
     const room = await ctx.db.query("rooms").withIndex("by_code", (q) => q.eq("code", code)).unique();
     if (!room) throw new ConvexError("Room not found.");
     if (room.status !== "waiting") throw new ConvexError("This game has already started.");
-    const seats = await ctx.db.query("seats").withIndex("by_room", (q) => q.eq("roomId", room._id)).collect();
+    const seats = await ctx.db.query("seats").withIndex("by_room", (q) => q.eq("roomId", room._id)).take(7);
     if (seats.length >= 6) throw new ConvexError("This room is full.");
     if (seats.some((seat) => seat.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new ConvexError("That player name is already used in this room.");
     const existingToken = seats.find((seat) => seat.token === token);
@@ -78,32 +83,64 @@ async function roomAndSeat(ctx: QueryCtx | MutationCtx, codeInput: string, token
 
 export const view = query({
   args: { code: v.string(), seatToken: v.string() },
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    let code: string;
+    let token: string;
+    try {
+      code = normalizedCode(args.code);
+      token = validToken(args.seatToken);
+    } catch {
+      return { kind: "unavailable" as const, code: args.code.trim().toUpperCase() };
+    }
+    const room = await ctx.db.query("rooms").withIndex("by_code", (q) => q.eq("code", code)).unique();
+    if (!room) return { kind: "unavailable" as const, code };
+    const seat = await ctx.db.query("seats").withIndex("by_room_token", (q) => q.eq("roomId", room._id).eq("token", token)).unique();
+    if (!seat) return { kind: "unavailable" as const, code };
+    const seats = await ctx.db.query("seats").withIndex("by_room", (q) => q.eq("roomId", room._id)).take(6);
+    if (!room.gameState) {
+      return {
+        kind: "lobby" as const, code: room.code, viewerPlayerId: seat.playerId,
+        hostPlayerId: room.hostPlayerId, discardVisibility: room.discardVisibility ?? "public",
+        players: seats.map(({ playerId, name }) => ({ id: playerId, name })),
+      };
+    }
+    const discardVisibility: DiscardVisibility = room.discardVisibility ?? "public";
+    return {
+      kind: "game" as const, hostPlayerId: room.hostPlayerId, discardVisibility,
+      ...createPlayerView(room.gameState as GameState, seat.playerId, room.revision, discardVisibility),
+    };
+  },
+});
+
+export const voiceIdentity = query({
+  args: { code: v.string(), seatToken: v.string() },
+  returns: v.object({ roomCode: v.string(), playerId: v.string(), playerName: v.string() }),
   handler: async (ctx, args) => {
     const { room, seat } = await roomAndSeat(ctx, args.code, args.seatToken);
-    const seats = await ctx.db.query("seats").withIndex("by_room", (q) => q.eq("roomId", room._id)).collect();
-    if (!room.gameState) {
-      return { kind: "lobby" as const, code: room.code, viewerPlayerId: seat.playerId, hostPlayerId: room.hostPlayerId, players: seats.map(({ playerId, name }) => ({ id: playerId, name })) };
-    }
-    return { kind: "game" as const, hostPlayerId: room.hostPlayerId, ...createPlayerView(room.gameState as GameState, seat.playerId, room.revision) };
+    return { roomCode: room.code, playerId: seat.playerId, playerName: seat.name };
   },
 });
 
 export const start = mutation({
   args: { code: v.string(), seatToken: v.string() },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const { room, seat } = await roomAndSeat(ctx, args.code, args.seatToken);
     if (seat.playerId !== room.hostPlayerId) throw new ConvexError("Only the host may start the game.");
     if (room.status !== "waiting") throw new ConvexError("This room is not waiting to start.");
-    const seats = await ctx.db.query("seats").withIndex("by_room", (q) => q.eq("roomId", room._id)).collect();
+    const seats = await ctx.db.query("seats").withIndex("by_room", (q) => q.eq("roomId", room._id)).take(6);
     if (seats.length < 2) throw new ConvexError("At least two players must join before starting.");
     seats.sort((a, b) => a.playerId.localeCompare(b.playerId, undefined, { numeric: true }));
     const state = createGame(seats.map((item) => item.name), Math.random, room.code);
     await ctx.db.patch(room._id, { gameState: state, status: "playing", revision: 0 });
+    return null;
   },
 });
 
 export const play = mutation({
   args: { code: v.string(), seatToken: v.string(), expectedRevision: v.number(), command: commandValidator },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const { room, seat } = await roomAndSeat(ctx, args.code, args.seatToken);
     if (!room.gameState) throw new ConvexError("The game has not started.");
@@ -114,11 +151,13 @@ export const play = mutation({
     );
     if (!result.ok) throw new ConvexError({ code: result.code, message: result.error });
     await ctx.db.patch(room._id, { gameState: result.game.state, revision: result.game.revision, status: result.game.state.status });
+    return null;
   },
 });
 
 export const advanceRound = mutation({
   args: { code: v.string(), seatToken: v.string(), expectedRevision: v.number() },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const { room, seat } = await roomAndSeat(ctx, args.code, args.seatToken);
     if (seat.playerId !== room.hostPlayerId) throw new ConvexError("Only the host may advance the round.");
@@ -126,11 +165,13 @@ export const advanceRound = mutation({
     const result = startNextRound(room.gameState as GameState, Math.random);
     if (!result.ok) throw new ConvexError(result.error);
     await ctx.db.patch(room._id, { gameState: result.state, status: result.state.status, revision: room.revision + 1 });
+    return null;
   },
 });
 
 export const finish = mutation({
   args: { code: v.string(), seatToken: v.string(), expectedRevision: v.number() },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const { room, seat } = await roomAndSeat(ctx, args.code, args.seatToken);
     if (seat.playerId !== room.hostPlayerId) throw new ConvexError("Only the host may end the game.");
@@ -138,5 +179,6 @@ export const finish = mutation({
     const result = endGame(room.gameState as GameState);
     if (!result.ok) throw new ConvexError(result.error);
     await ctx.db.patch(room._id, { gameState: result.state, status: result.state.status, revision: room.revision + 1 });
+    return null;
   },
 });

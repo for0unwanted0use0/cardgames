@@ -10,6 +10,25 @@ function game(): AuthoritativeGame {
   return { revision: 4, state: createGame(["Alice", "Bob", "Cara"], fixedRandom) };
 }
 
+function completeCurrentTurn(authoritative: AuthoritativeGame): AuthoritativeGame {
+  const actor = currentPlayer(authoritative.state);
+  const discarded = executePlayerCommand(authoritative, {
+    gameId: authoritative.state.id,
+    playerId: actor.id,
+    expectedRevision: authoritative.revision,
+    command: { type: "discard", cardIds: [actor.hand[0].id] },
+  });
+  if (!discarded.ok) throw new Error(discarded.error);
+  const drawn = executePlayerCommand(discarded.game, {
+    gameId: discarded.game.state.id,
+    playerId: actor.id,
+    expectedRevision: discarded.game.revision,
+    command: { type: "drawFromStock" },
+  }, fixedRandom);
+  if (!drawn.ok) throw new Error(drawn.error);
+  return drawn.game;
+}
+
 describe("private player views", () => {
   it("shows the viewer's hand and hides every opponent hand", () => {
     const authoritative = game();
@@ -31,6 +50,43 @@ describe("private player views", () => {
 
   it("rejects viewers without a seat", () => {
     expect(() => createPlayerView(game().state, "intruder", 0)).toThrow("does not occupy a seat");
+  });
+
+  it("shows public discard identities to every seated player", () => {
+    const completed = completeCurrentTurn(game());
+    const extraCard = completed.state.stock[0];
+    const groupState = {
+      ...completed.state,
+      stock: completed.state.stock.slice(1),
+      previousDiscard: [...completed.state.previousDiscard, extraCard],
+    };
+    const discardedIds = groupState.previousDiscard.map((card) => card.id);
+    for (const player of groupState.players) {
+      const view = createPlayerView(groupState, player.id, completed.revision, "public");
+      expect(view.previousDiscard.cards?.map((card) => card.id)).toEqual(discardedIds);
+    }
+  });
+
+  it("omits next-player-only discard identities from every non-current view, including the host", () => {
+    const authoritative = game();
+    const host = currentPlayer(authoritative.state);
+    const completed = completeCurrentTurn(authoritative);
+    const eligible = currentPlayer(completed.state);
+    const hiddenCard = completed.state.previousDiscard[0];
+    const eligibleView = createPlayerView(completed.state, eligible.id, completed.revision, "nextPlayerOnly");
+    expect(eligibleView.previousDiscard.cards).toEqual([hiddenCard]);
+
+    for (const viewer of completed.state.players.filter((player) => player.id !== eligible.id)) {
+      const view = createPlayerView(completed.state, viewer.id, completed.revision, "nextPlayerOnly");
+      expect(view.previousDiscard).toEqual({ count: 1 });
+      const serialized = JSON.stringify(view);
+      expect(serialized).not.toContain(hiddenCard.id);
+      const serializedDiscard = JSON.stringify(view.previousDiscard);
+      expect(serializedDiscard).not.toContain("cards");
+      expect(serializedDiscard).not.toContain("rank");
+      expect(serializedDiscard).not.toContain("suit");
+    }
+    expect(host.id).not.toBe(eligible.id);
   });
 });
 
@@ -88,5 +144,90 @@ describe("authoritative commands", () => {
     const drawCommand = envelope(discarded.game, { type: "drawFromStock" });
     const drawn = executePlayerCommand(discarded.game, drawCommand, fixedRandom);
     expect(drawn.ok && drawn.game.revision).toBe(6);
+  });
+
+  it("allows only the current player to take exactly one eligible discarded card", () => {
+    const authoritative = game();
+    const previousPlayer = currentPlayer(authoritative.state);
+    const completed = completeCurrentTurn(authoritative);
+    const extraCard = completed.state.stock[0];
+    const groupGame: AuthoritativeGame = {
+      revision: completed.revision,
+      state: {
+        ...completed.state,
+        stock: completed.state.stock.slice(1),
+        previousDiscard: [...completed.state.previousDiscard, extraCard],
+      },
+    };
+    const eligible = currentPlayer(groupGame.state);
+    const [cardId, remainderId] = groupGame.state.previousDiscard.map((card) => card.id);
+    const prepared = executePlayerCommand(groupGame, envelope(groupGame, { type: "discard", cardIds: [eligible.hand[0].id] }));
+    if (!prepared.ok) throw new Error(prepared.error);
+
+    const wrongPlayer = executePlayerCommand(prepared.game, {
+      gameId: prepared.game.state.id,
+      playerId: previousPlayer.id,
+      expectedRevision: prepared.game.revision,
+      command: { type: "drawFromPreviousDiscard", cardId },
+    });
+    expect(!wrongPlayer.ok && wrongPlayer.code).toBe("invalidAction");
+
+    const taken = executePlayerCommand(prepared.game, {
+      gameId: prepared.game.state.id,
+      playerId: eligible.id,
+      expectedRevision: prepared.game.revision,
+      command: { type: "drawFromPreviousDiscard", cardId },
+    });
+    expect(taken.ok).toBe(true);
+    if (!taken.ok) return;
+    const eligibleAfterDraw = taken.game.state.players.find((player) => player.id === eligible.id)!;
+    expect(eligibleAfterDraw.hand.filter((card) => card.id === cardId)).toHaveLength(1);
+    expect(eligibleAfterDraw.hand.some((card) => card.id === remainderId)).toBe(false);
+    expect(taken.game.state.discardPool.some((card) => card.id === remainderId)).toBe(true);
+    expect(taken.game.state.previousDiscard).toEqual(prepared.game.state.pendingDiscard);
+  });
+
+  it("rejects cards outside the eligible discard and expires the opportunity after a stock draw", () => {
+    const completed = completeCurrentTurn(game());
+    const eligible = currentPlayer(completed.state);
+    const eligibleId = completed.state.previousDiscard[0].id;
+    const invalidId = eligible.hand[0].id;
+    const prepared = executePlayerCommand(completed, envelope(completed, { type: "discard", cardIds: [invalidId] }));
+    if (!prepared.ok) throw new Error(prepared.error);
+
+    const invalid = executePlayerCommand(prepared.game, {
+      gameId: prepared.game.state.id, playerId: eligible.id, expectedRevision: prepared.game.revision,
+      command: { type: "drawFromPreviousDiscard", cardId: invalidId },
+    });
+    expect(!invalid.ok && invalid.code).toBe("invalidAction");
+
+    const stockDraw = executePlayerCommand(prepared.game, {
+      gameId: prepared.game.state.id, playerId: eligible.id, expectedRevision: prepared.game.revision,
+      command: { type: "drawFromStock" },
+    });
+    if (!stockDraw.ok) throw new Error(stockDraw.error);
+    const replay = executePlayerCommand(stockDraw.game, {
+      gameId: stockDraw.game.state.id, playerId: eligible.id, expectedRevision: stockDraw.game.revision,
+      command: { type: "drawFromPreviousDiscard", cardId: eligibleId },
+    });
+    expect(!replay.ok && replay.code).toBe("invalidAction");
+  });
+
+  it("rejects stale and replayed draw commands after the room revision changes", () => {
+    const authoritative = game();
+    const actor = currentPlayer(authoritative.state);
+    const discarded = executePlayerCommand(authoritative, envelope(authoritative, { type: "discard", cardIds: [actor.hand[0].id] }));
+    if (!discarded.ok) throw new Error(discarded.error);
+    const eligible = currentPlayer(discarded.game.state);
+    const draw = {
+      gameId: discarded.game.state.id,
+      playerId: eligible.id,
+      expectedRevision: discarded.game.revision,
+      command: { type: "drawFromStock" } as const,
+    };
+    const first = executePlayerCommand(discarded.game, draw, fixedRandom);
+    if (!first.ok) throw new Error(first.error);
+    const replay = executePlayerCommand(first.game, draw, fixedRandom);
+    expect(!replay.ok && replay.code).toBe("staleRevision");
   });
 });

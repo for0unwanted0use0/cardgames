@@ -9,6 +9,13 @@ export type VisiblePlayer = {
   hand: Card[] | null;
 };
 
+export type DiscardVisibility = "public" | "nextPlayerOnly";
+
+export type VisiblePreviousDiscard = {
+  count: number;
+  cards?: Card[];
+};
+
 export type PlayerGameView = {
   gameId: string;
   revision: number;
@@ -16,8 +23,7 @@ export type PlayerGameView = {
   players: VisiblePlayer[];
   playerOrder: string[];
   stockCount: number;
-  previousDiscard: Card[];
-  pendingDiscard: Card[];
+  previousDiscard: VisiblePreviousDiscard;
   currentPlayerId: string;
   roundNumber: number;
   status: GameStatus;
@@ -25,10 +31,17 @@ export type PlayerGameView = {
   winnerIds: string[];
 };
 
-export function createPlayerView(state: GameState, viewerPlayerId: string, revision: number): PlayerGameView {
+export function createPlayerView(
+  state: GameState,
+  viewerPlayerId: string,
+  revision: number,
+  discardVisibility: DiscardVisibility = "public",
+): PlayerGameView {
   if (!state.players.some((player) => player.id === viewerPlayerId)) {
     throw new Error("Viewer does not occupy a seat in this game.");
   }
+  const maySeeDiscard = discardVisibility === "public"
+    || state.playerOrder[state.currentPlayerIndex] === viewerPlayerId;
   return {
     gameId: state.id,
     revision,
@@ -42,8 +55,10 @@ export function createPlayerView(state: GameState, viewerPlayerId: string, revis
     })),
     playerOrder: state.playerOrder,
     stockCount: state.stock.length,
-    previousDiscard: state.previousDiscard,
-    pendingDiscard: state.pendingDiscard,
+    previousDiscard: {
+      count: state.previousDiscard.length,
+      ...(maySeeDiscard ? { cards: state.previousDiscard } : {}),
+    },
     currentPlayerId: state.playerOrder[state.currentPlayerIndex],
     roundNumber: state.roundNumber,
     status: state.status,

@@ -8,18 +8,25 @@
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@livekit/components-react": "^2.9.24",
     "convex": "^1.44.0",
+    "livekit-client": "^2.22.1",
+    "livekit-server-sdk": "^2.18.0",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest"
   },
   "devDependencies": {
+    "@edge-runtime/vm": "^5.0.0",
+    "@playwright/test": "^1.62.1",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "convex-test": "^0.0.56",
     "typescript": "latest",
     "vitest": "latest"
   },

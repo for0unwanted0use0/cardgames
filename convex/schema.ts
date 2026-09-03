@@ -7,6 +7,7 @@ export default defineSchema({
     hostPlayerId: v.string(),
     status: v.union(v.literal("waiting"), v.literal("playing"), v.literal("awaitingDraw"), v.literal("roundComplete"), v.literal("gameComplete")),
     revision: v.number(),
+    discardVisibility: v.optional(v.union(v.literal("public"), v.literal("nextPlayerOnly"))),
     gameState: v.optional(v.any()),
     createdAt: v.number(),
   }).index("by_code", ["code"]),

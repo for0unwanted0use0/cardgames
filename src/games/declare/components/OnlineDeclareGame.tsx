@@ -3,12 +3,15 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
+import { calculateHandScore } from "../engine/scoring";
 import type { Card } from "../engine/types";
+import type { DiscardVisibility } from "../multiplayer/views";
+import { PlayerSeat, PlayingCard, RoundResult } from "./FeltTable";
+import OnlineScoreboard from "./OnlineScoreboard";
+import VoicePanel from "./VoicePanel";
 
 type Credentials = { code: string; seatToken: string };
 const STORAGE_KEY = "declare-online-seat-v1";
-const symbols = { clubs: "♣", diamonds: "♦", hearts: "♥", spades: "♠" } as const;
-const cardLabel = (card: Card) => card.kind === "joker" ? "Joker" : `${card.rank}${symbols[card.suit]}`;
 const newToken = () => `${crypto.randomUUID()}${crypto.randomUUID()}`;
 const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (n) => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[n % 32]).join("");
 
@@ -16,6 +19,7 @@ export default function OnlineDeclareGame() {
   const [credentials, setCredentials] = useState<Credentials | null>(null);
   const [name, setName] = useState("");
   const [joinCode, setJoinCode] = useState("");
+  const [discardVisibility, setDiscardVisibility] = useState<DiscardVisibility>("public");
   const [selected, setSelected] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -32,79 +36,81 @@ export default function OnlineDeclareGame() {
     setLoaded(true);
   }, []);
 
-  function remember(next: Credentials) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    setCredentials(next);
-  }
-
+  function remember(next: Credentials) { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); setCredentials(next); }
   async function perform(action: () => Promise<unknown>) {
     try { setMessage(""); await action(); setSelected([]); }
     catch (error) { setMessage(error instanceof Error ? error.message : "The room action failed."); }
   }
-
   async function create() {
-    const code = newCode();
-    const seatToken = newToken();
-    await perform(async () => { await createRoom({ code, playerName: name, seatToken }); remember({ code, seatToken }); });
+    const code = newCode(); const seatToken = newToken();
+    await perform(async () => { await createRoom({ code, playerName: name, seatToken, discardVisibility }); remember({ code, seatToken }); });
   }
-
   async function join() {
-    const code = joinCode.trim().toUpperCase();
-    const seatToken = newToken();
+    const code = joinCode.trim().toUpperCase(); const seatToken = newToken();
     await perform(async () => { await joinRoom({ code, playerName: name, seatToken }); remember({ code, seatToken }); });
   }
-
-  function leave() {
-    localStorage.removeItem(STORAGE_KEY);
-    setCredentials(null);
-    setSelected([]);
-    setMessage("");
+  function leave() { localStorage.removeItem(STORAGE_KEY); setCredentials(null); setSelected([]); setMessage(""); }
+  async function copyCode(code: string) {
+    try { await navigator.clipboard.writeText(code); setMessage("Room code copied."); }
+    catch { setMessage(`Room code: ${code}`); }
   }
 
-  if (!loaded) return <section className="game-panel">Loading…</section>;
-  if (!credentials) return <section className="game-panel setup-panel">
-    <p className="eyebrow">Separate screens</p><h1>Online Declare</h1>
-    <p>Create a room or join with a six-character code.</p>
-    <div className="name-list">
-      <input aria-label="Your name" placeholder="Your name" value={name} onChange={(event) => setName(event.target.value)} />
-      <button disabled={!name.trim()} onClick={create}>Create room</button>
-      <div className="join-row">
-        <input aria-label="Room code" maxLength={6} placeholder="ROOM CODE" value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} />
-        <button disabled={!name.trim() || joinCode.trim().length !== 6} onClick={join}>Join room</button>
-      </div>
-    </div>
-    {message && <p className="error">{message}</p>}
+  if (!loaded) return <section className="game-panel loading-panel">Preparing the table…</section>;
+  if (!credentials) return <section className="game-panel lobby-shell">
+    <div className="lobby-intro"><p className="eyebrow">Play on separate screens</p><h1>Online Declare</h1><p>Set up a private table, share the six-character code, and play together in real time.</p></div>
+    <div className="lobby-grid">
+      <section className="lobby-card"><span className="lobby-step">01</span><h2>Create a table</h2><label className="field-label">Your name<input placeholder="e.g. Rahul" value={name} onChange={(event) => setName(event.target.value)} /></label>
+        <fieldset className="visibility-options"><legend>Who can see the discard?</legend>
+          <label><input type="radio" name="discardVisibility" checked={discardVisibility === "public"} onChange={() => setDiscardVisibility("public")} /><span><strong>Everyone</strong><small>All players see it; only the next player may draw.</small></span></label>
+          <label><input type="radio" name="discardVisibility" checked={discardVisibility === "nextPlayerOnly"} onChange={() => setDiscardVisibility("nextPlayerOnly")} /><span><strong>Next player only</strong><small>Other players see the discard count, never its identities.</small></span></label>
+        </fieldset><button disabled={!name.trim()} onClick={create}>Create private table</button>
+      </section>
+      <section className="lobby-card"><span className="lobby-step">02</span><h2>Join a table</h2><p>Use the same name field, then enter the room code shared by the host.</p><label className="field-label">Room code<input className="code-input" maxLength={6} autoCapitalize="characters" placeholder="ABC123" value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} /></label><button disabled={!name.trim() || joinCode.trim().length !== 6} onClick={join}>Join table</button></section>
+    </div>{message && <p className="error" role="alert">{message}</p>}
   </section>;
 
-  if (room === undefined) return <section className="game-panel"><p>Connecting to room {credentials.code}…</p></section>;
+  if (room === undefined) return <section className="game-panel loading-panel"><p className="eyebrow">Room {credentials.code}</p><h1>Taking your seat…</h1></section>;
+  if (room.kind === "unavailable") return <section className="game-panel lobby-shell"><p className="eyebrow">Room unavailable</p><h1>{room.code || "Saved room"} is no longer available</h1><p>The room may have expired or belong to a different deployment. Forget this saved seat to return safely.</p><button onClick={leave}>Return to room setup</button></section>;
   if (room.kind === "lobby") {
     const isHost = room.viewerPlayerId === room.hostPlayerId;
-    return <section className="game-panel setup-panel">
-      <p className="eyebrow">Room code</p><h1 className="room-code">{room.code}</h1>
-      <p>Share this code. The lobby updates automatically when players join.</p>
-      <div className="lobby-list">{room.players.map((player) => <div key={player.id}>{player.name}{player.id === room.hostPlayerId ? " — host" : ""}</div>)}</div>
-      {isHost ? <button disabled={room.players.length < 2} onClick={() => perform(() => startRoom({ code: credentials.code, seatToken: credentials.seatToken }))}>Start game</button> : <p className="subtle">Waiting for the host to start…</p>}
-      <button className="quiet danger" onClick={leave}>Leave this device</button>
-      {message && <p className="error">{message}</p>}
+    return <section className="game-panel waiting-lobby">
+      <header className="lobby-room-header"><div><p className="eyebrow">Waiting room</p><h1>Gather at the table</h1></div><button className="room-code-button" onClick={() => copyCode(room.code)} aria-label={`Copy room code ${room.code}`}><small>Room code · tap to copy</small><strong>{room.code}</strong></button></header>
+      <div className="waiting-layout"><section><h2>Players seated</h2><div className="lobby-list">{room.players.map((player, index) => <div key={player.id}><span className="seat-initials">{player.name[0]?.toUpperCase()}</span><strong>{player.name}</strong><small>{player.id === room.hostPlayerId ? "Host" : `Seat ${index + 1}`}</small></div>)}</div></section><aside className="lobby-settings"><p className="eyebrow">Table setting</p><strong>{room.discardVisibility === "nextPlayerOnly" ? "Private discard" : "Public discard"}</strong><p>{room.discardVisibility === "nextPlayerOnly" ? "Only the next player sees card identities." : "Everyone sees the eligible discard."}</p></aside></div>
+      {isHost ? <div className="lobby-actions"><button disabled={room.players.length < 2} onClick={() => perform(() => startRoom({ code: credentials.code, seatToken: credentials.seatToken }))}>Start game · {room.players.length}/6</button>{room.players.length < 2 && <span className="subtle">At least two players are needed.</span>}</div> : <p className="turn-banner waiting"><strong>Waiting for the host</strong><span>The game will begin automatically on this screen.</span></p>}
+      <button className="quiet danger lobby-leave" onClick={leave}>Leave this table</button>{message && <p className="error" role="alert">{message}</p>}
     </section>;
   }
 
   const viewer = room.players.find((player) => player.id === room.viewerPlayerId)!;
+  const currentPlayer = room.players.find((player) => player.id === room.currentPlayerId)!;
+  const opponents = room.players.filter((player) => player.id !== room.viewerPlayerId);
   const isTurn = room.currentPlayerId === room.viewerPlayerId;
   const isHost = room.hostPlayerId === room.viewerPlayerId;
   const ownHand = (viewer.hand ?? []) as Card[];
-  const send = (command: { type: "discard"; cardIds: string[] } | { type: "drawFromStock" } | { type: "drawFromPreviousDiscard"; cardId: string } | { type: "declare" }) =>
-    perform(() => play({ code: credentials.code, seatToken: credentials.seatToken, expectedRevision: room.revision, command }));
+  const discardCards = (room.previousDiscard.cards ?? []) as Card[];
+  const canDeclare = isTurn && room.status === "playing" && calculateHandScore(ownHand) < 10;
+  const activeGame = room.status === "playing" || room.status === "awaitingDraw";
+  const send = (command: { type: "discard"; cardIds: string[] } | { type: "drawFromStock" } | { type: "drawFromPreviousDiscard"; cardId: string } | { type: "declare" }) => perform(() => play({ code: credentials.code, seatToken: credentials.seatToken, expectedRevision: room.revision, command }));
+  const turnInstruction = room.status === "awaitingDraw" ? "Choose one card to draw" : "Choose cards to discard";
 
-  return <section className="game-panel">
-    <header className="game-header"><div><p className="eyebrow">Room {credentials.code} · Round {room.roundNumber}</p><h1>Online Declare</h1></div><div className="stock-count">Stock <strong>{room.stockCount}</strong></div></header>
-    <p className="turn-banner">{isTurn ? `Your turn: ${room.status === "awaitingDraw" ? "draw one card" : "discard or Declare"}` : `Waiting for ${room.players.find((player) => player.id === room.currentPlayerId)?.name}`}</p>
-    <div className="score-strip">{room.players.map((player) => <span key={player.id}>{player.name}: <strong>{player.score}</strong> · {player.cardCount} cards</span>)}</div>
-    <article className="hand current"><div className="hand-title"><h2>Your hand</h2><span>{ownHand.length} cards</span></div><div className="cards">{ownHand.map((card) => <button key={card.id} disabled={!isTurn || room.status !== "playing"} onClick={() => setSelected((items) => items.includes(card.id) ? items.filter((id) => id !== card.id) : [...items, card.id])} className={`card ${card.kind === "standard" && (card.suit === "hearts" || card.suit === "diamonds") ? "red" : ""} ${selected.includes(card.id) ? "selected" : ""}`}>{cardLabel(card)}</button>)}</div></article>
-    {isTurn && room.status === "playing" && <div className="turn-actions"><button disabled={!selected.length} onClick={() => send({ type: "discard", cardIds: selected })}>Discard selected ({selected.length})</button><button className="declare" onClick={() => send({ type: "declare" })}>Declare</button></div>}
-    {isTurn && room.status === "awaitingDraw" && <div className="draw-panel"><p><strong>Your discard:</strong> {(room.pendingDiscard as Card[]).map(cardLabel).join(", ")}</p><button onClick={() => send({ type: "drawFromStock" })}>Draw from stock</button><p><strong>Or take one previous discard:</strong></p><div className="cards compact">{(room.previousDiscard as Card[]).map((card) => <button className="card" key={card.id} onClick={() => send({ type: "drawFromPreviousDiscard", cardId: card.id })}>{cardLabel(card)}</button>)}</div></div>}
-    {room.status === "roundComplete" && room.declarationResult && <div className={`result ${room.declarationResult.succeeded ? "success" : "failure"}`}><h2>Declaration {room.declarationResult.succeeded ? "succeeded" : "failed"}</h2>{room.players.map((player) => <p key={player.id}>{player.name}: hand {room.declarationResult!.handScores[player.id]}, round +{room.declarationResult!.roundScores[player.id]}, total {player.score}</p>)}{isHost && <div className="actions"><button onClick={() => perform(() => advanceRound({ code: credentials.code, seatToken: credentials.seatToken, expectedRevision: room.revision }))}>Next round</button><button className="secondary" onClick={() => perform(() => finish({ code: credentials.code, seatToken: credentials.seatToken, expectedRevision: room.revision }))}>End game</button></div>}</div>}
-    {room.status === "gameComplete" && <div className="result success"><h2>Game complete</h2><p>Winner{room.winnerIds.length === 1 ? "" : "s"}: {room.players.filter((player) => room.winnerIds.includes(player.id)).map((player) => player.name).join(", ")}</p></div>}
-    {message && <p className="error">{message}</p>}<div className="footer-actions"><button className="quiet danger" onClick={leave}>Forget room on this device</button></div>
+  return <section className="online-game-shell"><div className="gameplay-stage">
+    <header className="online-game-header"><div className="game-title"><p className="eyebrow">Classic Declare</p><h1>Online Declare</h1></div><div className="game-meta"><button className="meta-chip room-chip" onClick={() => copyCode(credentials.code)} aria-label={`Copy room code ${credentials.code}`}><small>Room</small><strong>{credentials.code}</strong></button><span className="meta-chip"><small>Round</small><strong>{room.roundNumber}</strong></span><span className="meta-chip"><small>Stock</small><strong>{room.stockCount}</strong></span></div></header>
+    {activeGame && <div className={`turn-banner ${isTurn ? "your-turn" : "waiting"}`} aria-live="polite"><span className="turn-symbol" aria-hidden="true">{isTurn ? "◆" : "○"}</span><span><strong>{isTurn ? "Your turn" : `${currentPlayer.name}’s turn`}</strong><small>{isTurn ? turnInstruction : `Waiting for ${currentPlayer.name} to ${room.status === "awaitingDraw" ? "draw" : "discard or Declare"}`}</small></span></div>}
+    <div className="game-layout"><main className="table-column">
+      <section className="felt-table" aria-label="Card table"><div className="opponent-strip">{opponents.map((player) => <PlayerSeat key={player.id} name={player.name} cardCount={player.cardCount} score={player.score} isCurrent={player.id === room.currentPlayerId} />)}</div><div className="table-center">
+        <section className="pile-zone discard-zone" aria-label="Previous discard"><p className="pile-label">Previous discard</p>{room.previousDiscard.count === 0 ? <div className="empty-pile"><span>Empty</span></div> : discardCards.length > 0 ? <div className="discard-cards">{discardCards.map((card) => <PlayingCard card={card} compact key={card.id} />)}</div> : <div className="hidden-discard"><strong>{room.previousDiscard.count}</strong><span>cards hidden</span></div>}<small>{room.previousDiscard.count > 0 && discardCards.length === 0 ? "Visible only to the eligible player" : `${room.previousDiscard.count} card${room.previousDiscard.count === 1 ? "" : "s"}`}</small></section><span className="table-or">or</span>
+        <section className="pile-zone stock-zone" aria-label={`${room.stockCount} cards in stock`}><p className="pile-label">Stock</p><button className="stock-pile" disabled={!(isTurn && room.status === "awaitingDraw")} onClick={() => send({ type: "drawFromStock" })} aria-label={isTurn && room.status === "awaitingDraw" ? `Draw from stock, ${room.stockCount} cards remaining` : `Stock, ${room.stockCount} cards remaining`}><span className="card-back-mark">CT</span></button><small>{room.stockCount} remaining</small></section>
+      </div></section>
+      <section className="player-hand" aria-labelledby="your-hand-title"><div className="hand-title"><div><p className="eyebrow">Your cards</p><h2 id="your-hand-title">Your hand <span>({ownHand.length})</span></h2></div>{isTurn && room.status === "playing" && <small>{selected.length ? `${selected.length} selected` : "Tap cards to select"}</small>}</div><div className="hand-cards">{ownHand.map((card) => <PlayingCard key={card.id} card={card} selected={selected.includes(card.id)} disabled={!isTurn || room.status !== "playing"} onClick={() => setSelected((items) => items.includes(card.id) ? items.filter((id) => id !== card.id) : [...items, card.id])} />)}{ownHand.length === 0 && <span className="subtle">Your hand is empty. Declare to resolve the round.</span>}</div></section>
+      <section className="action-bar" aria-label="Game actions">
+        {isTurn && room.status === "playing" && <><div><strong>Select cards to discard</strong><small>Choose one or more cards from your hand.</small></div><div className="action-buttons"><button disabled={!selected.length} onClick={() => send({ type: "discard", cardIds: selected })}>Discard selected{selected.length ? ` · ${selected.length}` : ""}</button>{canDeclare && <button className="declare" onClick={() => send({ type: "declare" })}>Declare</button>}</div></>}
+        {isTurn && room.status === "awaitingDraw" && <><div><strong>Choose your draw</strong><small>Take one eligible discard card or draw from stock.</small></div><div className="draw-options"><div className="draw-discard-cards">{discardCards.map((card) => <PlayingCard compact key={card.id} card={card} onClick={() => send({ type: "drawFromPreviousDiscard", cardId: card.id })} />)}</div><button onClick={() => send({ type: "drawFromStock" })}>Draw from stock</button></div></>}
+        {!isTurn && activeGame && <div className="waiting-action"><span className="waiting-dots" aria-hidden="true">•••</span><span><strong>Waiting for {currentPlayer.name}</strong><small>Your cards will unlock when it is your turn.</small></span></div>}
+      </section>
+    </main></div></div>
+    <aside className="utility-rail" aria-label="Game information"><OnlineScoreboard roundNumber={room.roundNumber} players={room.players} roundScores={room.declarationResult?.roundScores} /><VoicePanel roomCode={credentials.code} seatToken={credentials.seatToken} /><details className="game-details"><summary>Table information</summary><dl><div><dt>Discard</dt><dd>{room.discardVisibility === "nextPlayerOnly" ? "Next player only" : "Visible to all"}</dd></div><div><dt>Your score</dt><dd>{viewer.score}</dd></div><div><dt>Your hand</dt><dd>{calculateHandScore(ownHand)} points</dd></div></dl><button className="quiet danger" onClick={leave}>Forget room on this device</button></details></aside>
+    {room.status === "roundComplete" && room.declarationResult && <RoundResult result={room.declarationResult} players={room.players} isHost={isHost} onNextRound={() => perform(() => advanceRound({ code: credentials.code, seatToken: credentials.seatToken, expectedRevision: room.revision }))} onEndGame={() => perform(() => finish({ code: credentials.code, seatToken: credentials.seatToken, expectedRevision: room.revision }))} />}
+    {room.status === "gameComplete" && <section className="round-result game-complete" role="status"><p className="eyebrow">Final result</p><h2>Game complete</h2><p>Winner{room.winnerIds.length === 1 ? "" : "s"}: <strong>{room.players.filter((player) => room.winnerIds.includes(player.id)).map((player) => player.name).join(", ")}</strong></p></section>}
+    {message && <p className="error floating-error" role="alert">{message}</p>}
   </section>;
 }

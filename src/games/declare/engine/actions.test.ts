@@ -42,15 +42,16 @@ describe("turn behavior", () => {
     expect(result.state).toBe(state);
   });
 
-  it("removes a valid discard, draws one stock card, and advances the turn", () => {
+  it("keeps the player active to draw after discarding, then advances the turn", () => {
     const state = createGame(["A", "B"], fixedRandom);
     const player = currentPlayer(state);
     const discarded = player.hand[0];
     const afterDiscard = discardCards(state, player.id, [discarded.id]);
     expect(afterDiscard.ok).toBe(true);
     if (!afterDiscard.ok) return;
-    expect(currentPlayer(afterDiscard.state).hand).toHaveLength(6);
+    expect(afterDiscard.state.players.find((item) => item.id === player.id)?.hand).toHaveLength(6);
     expect(afterDiscard.state.status).toBe("awaitingDraw");
+    expect(currentPlayer(afterDiscard.state).id).toBe(player.id);
 
     const afterDraw = drawFromStock(afterDiscard.state, player.id, fixedRandom);
     expect(afterDraw.ok).toBe(true);
@@ -76,7 +77,7 @@ describe("turn behavior", () => {
     expect(secondDraw.ok).toBe(true);
     if (!secondDraw.ok) return;
     expect(secondDraw.state.players.find((item) => item.id === second.id)?.hand.some((item) => item.id === availableId)).toBe(true);
-    expect(secondDraw.state.previousDiscard).toHaveLength(1);
+    expect(secondDraw.state.previousDiscard.map((item) => item.id)).toEqual([second.hand[0].id]);
     expect(allLocatedCards(secondDraw.state)).toHaveLength(55);
   });
 
