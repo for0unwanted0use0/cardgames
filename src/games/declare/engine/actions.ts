@@ -1,5 +1,5 @@
 import { createDeck, dealCards, shuffleDeck } from "./deck";
-import { isValidDiscard } from "./rules";
+import { discardValidationError } from "./rules";
 import { calculateHandScore } from "./scoring";
 import {
   MAX_PLAYERS, MIN_PLAYERS, assertCardInvariant, currentPlayer,
@@ -13,15 +13,20 @@ function randomIndex(length: number, random: RandomSource): number {
   return Math.min(length - 1, Math.floor(random() * length));
 }
 
-function newRoundState(players: readonly PlayerState[], random: RandomSource) {
+function newRoundState(players: readonly PlayerState[], random: RandomSource, startingPlayerId?: string) {
   const dealt = dealCards(shuffleDeck(createDeck(), random), players.length);
+  const [openingDiscard, ...stock] = dealt.stock;
+  if (!openingDiscard) throw new Error("The deck does not contain an opening discard.");
+  const requestedStarterIndex = startingPlayerId
+    ? players.findIndex((player) => player.id === startingPlayerId)
+    : -1;
   return {
     players: players.map((player, index) => ({ ...player, hand: dealt.hands[index] })),
-    stock: dealt.stock,
-    previousDiscard: [] as Card[],
+    stock,
+    previousDiscard: [openingDiscard],
     discardPool: [] as Card[],
     pendingDiscard: [] as Card[],
-    currentPlayerIndex: randomIndex(players.length, random),
+    currentPlayerIndex: requestedStarterIndex >= 0 ? requestedStarterIndex : randomIndex(players.length, random),
     status: "playing" as const,
     declarationResult: null,
   };
@@ -66,13 +71,13 @@ function verifyTurn(state: GameState, playerId: string, requiredStatus: GameStat
 export function discardCards(state: GameState, playerId: string, cardIds: readonly string[]): ActionResult {
   const turnError = verifyTurn(state, playerId, "playing");
   if (turnError) return failure(state, turnError);
-  if (cardIds.length === 0 || new Set(cardIds).size !== cardIds.length) {
-    return failure(state, "Select one or more distinct cards to discard.");
-  }
+  if (cardIds.length === 0) return failure(state, "Select at least one card to discard.");
+  if (new Set(cardIds).size !== cardIds.length) return failure(state, "The same card was selected more than once. Select each card only once.");
   const player = currentPlayer(state);
   const selected = cardIds.map((id) => player.hand.find((card) => card.id === id));
-  if (selected.some((card) => !card)) return failure(state, "The selected cards are not all in this hand.");
-  if (!isValidDiscard(selected as Card[])) return failure(state, "That is not a valid single, same-rank group, or sequence.");
+  if (selected.some((card) => !card)) return failure(state, "One or more selected cards are no longer in your hand. Refresh your selection and try again.");
+  const validationError = discardValidationError(selected as Card[]);
+  if (validationError) return failure(state, validationError);
   return success({
     ...state,
     players: state.players.map((candidate) => candidate.id === playerId
@@ -154,7 +159,17 @@ export function declare(state: GameState, playerId: string): ActionResult {
 
 export function startNextRound(state: GameState, random: RandomSource = Math.random): ActionResult {
   if (state.status !== "roundComplete") return failure(state, "Complete the current round before starting another.");
-  return success({ ...state, ...newRoundState(state.players, random), roundNumber: state.roundNumber + 1 });
+  if (!state.declarationResult) return failure(state, "The completed round has no result.");
+  const lowestHandScore = Math.min(...Object.values(state.declarationResult.handScores));
+  const startingPlayerId = state.playerOrder.find(
+    (playerId) => state.declarationResult?.handScores[playerId] === lowestHandScore,
+  );
+  if (!startingPlayerId) return failure(state, "The completed round has no winning player.");
+  return success({
+    ...state,
+    ...newRoundState(state.players, random, startingPlayerId),
+    roundNumber: state.roundNumber + 1,
+  });
 }
 
 export function endGame(state: GameState): ActionResult {

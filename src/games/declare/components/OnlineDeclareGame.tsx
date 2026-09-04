@@ -6,8 +6,10 @@ import { api } from "../../../../convex/_generated/api";
 import { calculateHandScore } from "../engine/scoring";
 import type { Card } from "../engine/types";
 import type { DiscardVisibility } from "../multiplayer/views";
-import { PlayerSeat, PlayingCard, RoundResult } from "./FeltTable";
+import { playerFacingError } from "../multiplayer/errors";
+import { PlayerSeat, PlayingCard, RevealedHands, RoundResult } from "./FeltTable";
 import OnlineScoreboard from "./OnlineScoreboard";
+import TurnAlertControl from "./TurnAlertControl";
 import VoicePanel from "./VoicePanel";
 
 type Credentials = { code: string; seatToken: string };
@@ -39,7 +41,7 @@ export default function OnlineDeclareGame() {
   function remember(next: Credentials) { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); setCredentials(next); }
   async function perform(action: () => Promise<unknown>) {
     try { setMessage(""); await action(); setSelected([]); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "The room action failed."); }
+    catch (error) { setMessage(playerFacingError(error)); }
   }
   async function create() {
     const code = newCode(); const seatToken = newToken();
@@ -111,9 +113,9 @@ export default function OnlineDeclareGame() {
         {!isTurn && activeGame && <div className="waiting-action"><span className="waiting-dots" aria-hidden="true">•••</span><span><strong>Waiting for {currentPlayer.name}</strong><small>Your cards will unlock when it is your turn.</small></span></div>}
       </section>
     </main></div></div>
-    <aside className="utility-rail" aria-label="Game information"><OnlineScoreboard roundNumber={room.roundNumber} players={room.players} roundScores={room.declarationResult?.roundScores} /><VoicePanel roomCode={credentials.code} seatToken={credentials.seatToken} /><details className="game-details"><summary>Table information</summary><dl><div><dt>Discard</dt><dd>{room.discardVisibility === "nextPlayerOnly" ? "Next player only" : "Visible to all"}</dd></div><div><dt>Your score</dt><dd>{viewer.score}</dd></div><div><dt>Your hand</dt><dd>{calculateHandScore(ownHand)} points</dd></div></dl><button className="quiet danger" onClick={confirmLeave}>Forget room on this device</button></details></aside>
+    <aside className="utility-rail" aria-label="Game information"><OnlineScoreboard roundNumber={room.roundNumber} players={room.players} completedRounds={room.completedRounds} /><VoicePanel roomCode={credentials.code} seatToken={credentials.seatToken} /><details className="game-details"><summary><span>Table information</span><span aria-hidden="true">⌄</span></summary><dl><div><dt>Discard visibility</dt><dd>{room.discardVisibility === "nextPlayerOnly" ? "Next player only" : "Visible to all"}</dd></div></dl><TurnAlertControl isTurn={isTurn} activeGame={activeGame} /><button className="quiet danger" onClick={confirmLeave}>Forget room on this device</button></details></aside>
     {room.status === "roundComplete" && room.declarationResult && <RoundResult result={room.declarationResult} players={room.players} isHost={isHost} onNextRound={() => perform(() => advanceRound({ code: credentials.code, seatToken: credentials.seatToken, expectedRevision: room.revision }))} onEndGame={() => perform(() => finish({ code: credentials.code, seatToken: credentials.seatToken, expectedRevision: room.revision }))} onLeave={confirmLeave} />}
-    {room.status === "gameComplete" && <section className="round-result game-complete" role="status"><p className="eyebrow">Final result</p><h2>Game complete</h2><p>Winner{room.winnerIds.length === 1 ? "" : "s"}: <strong>{room.players.filter((player) => room.winnerIds.includes(player.id)).map((player) => player.name).join(", ")}</strong></p><button className="return-home" onClick={confirmLeave}>Return home</button></section>}
+    {room.status === "gameComplete" && <section className="round-result game-complete" role="status"><p className="eyebrow">Final result</p><h2>Game complete</h2><p>Winner{room.winnerIds.length === 1 ? "" : "s"}: <strong>{room.players.filter((player) => room.winnerIds.includes(player.id)).map((player) => player.name).join(", ")}</strong></p><RevealedHands players={room.players} /><button className="return-home" onClick={confirmLeave}>Return home</button></section>}
     {message && <p className="error floating-error" role="alert">{message}</p>}
   </section>;
 }

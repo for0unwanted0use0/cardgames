@@ -48,6 +48,40 @@ describe("private player views", () => {
     }
   });
 
+  it("reveals every hand only after a round or game has completed", () => {
+    const authoritative = game();
+    const viewer = authoritative.state.players[0];
+    const activeView = createPlayerView(authoritative.state, viewer.id, authoritative.revision);
+    expect(activeView.players.slice(1).every((player) => player.hand === null)).toBe(true);
+
+    const roundComplete = { ...authoritative.state, status: "roundComplete" as const };
+    const resultView = createPlayerView(roundComplete, viewer.id, authoritative.revision);
+    expect(resultView.players.every((player, index) => player.hand === roundComplete.players[index].hand)).toBe(true);
+
+    const gameComplete = { ...authoritative.state, status: "gameComplete" as const };
+    const finalView = createPlayerView(gameComplete, viewer.id, authoritative.revision);
+    expect(finalView.players.every((player, index) => player.hand === gameComplete.players[index].hand)).toBe(true);
+  });
+
+  it("shows the same completed round score history to every seated player", () => {
+    const authoritative = game();
+    const rounds = [{
+      roundNumber: 1,
+      declarerId: "player-1",
+      succeeded: true,
+      handScores: { "player-1": 4, "player-2": 9, "player-3": 12 },
+      roundScores: { "player-1": 0, "player-2": 9, "player-3": 12 },
+    }];
+    const state = { ...authoritative.state, roundNumber: 2, rounds };
+
+    for (const player of state.players) {
+      expect(createPlayerView(state, player.id, authoritative.revision).completedRounds).toEqual([{
+        roundNumber: 1,
+        roundScores: { "player-1": 0, "player-2": 9, "player-3": 12 },
+      }]);
+    }
+  });
+
   it("rejects viewers without a seat", () => {
     expect(() => createPlayerView(game().state, "intruder", 0)).toThrow("does not occupy a seat");
   });

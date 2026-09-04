@@ -1,8 +1,8 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
 
 const viewports = [
-  { width: 360, height: 800 }, { width: 390, height: 844 }, { width: 430, height: 932 },
-  { width: 768, height: 900 }, { width: 1024, height: 768 }, { width: 1440, height: 900 },
+  { width: 400, height: 546 }, { width: 360, height: 800 }, { width: 390, height: 844 }, { width: 430, height: 932 },
+  { width: 768, height: 900 }, { width: 1024, height: 768 }, { width: 1321, height: 571 }, { width: 1440, height: 900 },
 ];
 
 async function assertNoPageOverflow(page: Page) {
@@ -65,6 +65,8 @@ test("two private-discard players can join, start, discard, and draw", async ({ 
     const actor = hostStarts ? host.page : guest.page;
     const nextPlayer = hostStarts ? guest.page : host.page;
     await expect(actor.getByText("Your turn", { exact: true })).toBeVisible();
+    await expect(actor.locator(".stock-zone")).toContainText("40 remaining");
+    await expect(actor.locator(".discard-zone .playing-card")).toHaveCount(1);
     await expect(nextPlayer.locator(".turn-banner.waiting")).toBeVisible();
     await assertGameplayFitsViewport(actor);
     await assertGameplayFitsViewport(nextPlayer);
@@ -77,6 +79,11 @@ test("two private-discard players can join, start, discard, and draw", async ({ 
     await expect(nextPlayer.getByText("Your turn", { exact: true })).toBeVisible();
     await expect(nextPlayer.locator(".discard-zone .playing-card")).toHaveCount(1);
     await expect(actor.getByText("cards hidden", { exact: true })).toBeVisible();
+    await actor.locator(".game-details summary").click();
+    const turnAlerts = actor.getByRole("button", { name: "Enable" });
+    await turnAlerts.click();
+    await expect(actor.getByRole("button", { name: "On", exact: true })).toHaveAttribute("aria-pressed", "true");
+    expect(await actor.evaluate(() => localStorage.getItem("declare-turn-alerts-v1"))).toBe("on");
     await assertNoPageOverflow(host.page);
     await assertNoPageOverflow(guest.page);
     actor.once("dialog", async (dialog) => dialog.dismiss());
@@ -117,6 +124,9 @@ test("a six-player table remains usable on desktop and mobile", async ({ browser
       await assertGameplayFitsViewport(host.page);
       await assertNoPageOverflow(host.page);
     }
+    await host.page.locator(".utility-rail").scrollIntoViewIfNeeded();
+    const collapsedHeights = await host.page.locator(".voice-panel, .game-details").evaluateAll((panels) => panels.map((panel) => panel.getBoundingClientRect().height));
+    expect(collapsedHeights.every((height) => height <= 55)).toBe(true);
     await host.page.setViewportSize({ width: 360, height: 800 });
     const stripScrolls = await host.page.locator(".opponent-strip").evaluate((element) => element.scrollWidth > element.clientWidth);
     expect(stripScrolls).toBe(true);

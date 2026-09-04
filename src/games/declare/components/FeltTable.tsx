@@ -46,7 +46,17 @@ export function PlayerSeat({ name, cardCount, score, isCurrent, isViewer = false
   </article>;
 }
 
-type ResultPlayer = { id: string; name: string; score: number };
+type ResultPlayer = { id: string; name: string; score: number; hand?: Card[] | null };
+
+export function RevealedHands({ players }: { players: ResultPlayer[] }) {
+  return <section className="revealed-hands" aria-labelledby="revealed-hands-title">
+    <h3 id="revealed-hands-title">Final hands</h3>
+    {players.map((player) => <article key={player.id} className="revealed-hand">
+      <div><strong>{player.name}</strong><small>{player.hand?.length ?? 0} card{player.hand?.length === 1 ? "" : "s"}</small></div>
+      <div className="revealed-cards">{player.hand?.map((card) => <PlayingCard key={card.id} card={card} compact />)}</div>
+    </article>)}
+  </section>;
+}
 
 export function RoundResult({ result, players, isHost, onNextRound, onEndGame, onLeave }: {
   result: DeclarationResult;
@@ -64,6 +74,7 @@ export function RoundResult({ result, players, isHost, onNextRound, onEndGame, o
     <div className="result-scores">
       {players.map((player) => <div key={player.id}><span>{player.name}</span><strong>+{result.roundScores[player.id]}</strong><small>Total {player.score}</small></div>)}
     </div>
+    <RevealedHands players={players} />
     {isHost ? <div className="actions"><button onClick={onNextRound}>Next round</button><button className="secondary" onClick={onEndGame}>End game</button><button className="result-exit" onClick={onLeave}>Leave table</button></div> : <div className="result-waiting"><p>Waiting for the host to continue…</p><button className="result-exit" onClick={onLeave}>Leave table</button></div>}
   </section>;
 }

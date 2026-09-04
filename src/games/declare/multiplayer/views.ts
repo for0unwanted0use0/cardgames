@@ -16,6 +16,11 @@ export type VisiblePreviousDiscard = {
   cards?: Card[];
 };
 
+export type VisibleRoundScore = {
+  roundNumber: number;
+  roundScores: Record<string, number>;
+};
+
 export type PlayerGameView = {
   gameId: string;
   revision: number;
@@ -26,6 +31,7 @@ export type PlayerGameView = {
   previousDiscard: VisiblePreviousDiscard;
   currentPlayerId: string;
   roundNumber: number;
+  completedRounds: VisibleRoundScore[];
   status: GameStatus;
   declarationResult: DeclarationResult | null;
   winnerIds: string[];
@@ -42,6 +48,7 @@ export function createPlayerView(
   }
   const maySeeDiscard = discardVisibility === "public"
     || state.playerOrder[state.currentPlayerIndex] === viewerPlayerId;
+  const revealAllHands = state.status === "roundComplete" || state.status === "gameComplete";
   return {
     gameId: state.id,
     revision,
@@ -51,7 +58,7 @@ export function createPlayerView(
       name: player.name,
       score: player.score,
       cardCount: player.hand.length,
-      hand: player.id === viewerPlayerId ? player.hand : null,
+      hand: revealAllHands || player.id === viewerPlayerId ? player.hand : null,
     })),
     playerOrder: state.playerOrder,
     stockCount: state.stock.length,
@@ -61,6 +68,7 @@ export function createPlayerView(
     },
     currentPlayerId: state.playerOrder[state.currentPlayerIndex],
     roundNumber: state.roundNumber,
+    completedRounds: state.rounds.map(({ roundNumber, roundScores }) => ({ roundNumber, roundScores })),
     status: state.status,
     declarationResult: state.declarationResult,
     winnerIds: state.winnerIds,

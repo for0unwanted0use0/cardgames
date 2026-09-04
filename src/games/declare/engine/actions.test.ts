@@ -42,6 +42,29 @@ describe("turn behavior", () => {
     expect(result.state).toBe(state);
   });
 
+  it("explains why invalid discard selections are rejected", () => {
+    const state = withHands([[
+      card("3"), card("5", "hearts"), card("5", "spades"), card("7", "diamonds"),
+      { id: "joker-1", kind: "joker" }, card("9"), card("K"),
+    ], [card("A")]]);
+    const playerId = state.players[0].id;
+
+    const empty = discardCards(state, playerId, []);
+    expect(!empty.ok && empty.error).toBe("Select at least one card to discard.");
+
+    const pair = discardCards(state, playerId, ["clubs-3", "hearts-5"]);
+    expect(!pair.ok && pair.error).toBe("These two cards have different ranks. A two-card discard must be a matching pair.");
+
+    const jokerPair = discardCards(state, playerId, ["clubs-3", "joker-1"]);
+    expect(!jokerPair.ok && jokerPair.error).toContain("Jokers may be used only in sequences of three or more cards");
+
+    const duplicateSequence = discardCards(state, playerId, ["clubs-3", "hearts-5", "spades-5"]);
+    expect(!duplicateSequence.ok && duplicateSequence.error).toContain("cannot contain duplicate natural ranks");
+
+    const missingRanks = discardCards(state, playerId, ["clubs-3", "diamonds-7", "joker-1"]);
+    expect(!missingRanks.ok && missingRanks.error).toContain("3 missing ranks, but only 1 Joker is available");
+  });
+
   it("keeps the player active to draw after discarding, then advances the turn", () => {
     const state = createGame(["A", "B"], fixedRandom);
     const player = currentPlayer(state);
@@ -59,6 +82,23 @@ describe("turn behavior", () => {
     expect(afterDraw.state.players.find((item) => item.id === player.id)?.hand).toHaveLength(7);
     expect(afterDraw.state.previousDiscard.map((item) => item.id)).toEqual([discarded.id]);
     expect(currentPlayer(afterDraw.state).id).not.toBe(player.id);
+  });
+
+  it("opens one card beside the stock for the first player to choose after discarding", () => {
+    const state = createGame(["A", "B"], fixedRandom);
+    expect(state.previousDiscard).toHaveLength(1);
+    expect(state.stock).toHaveLength(40);
+    expect(allLocatedCards(state)).toHaveLength(55);
+
+    const player = currentPlayer(state);
+    const discarded = discardCards(state, player.id, [player.hand[0].id]);
+    if (!discarded.ok) throw new Error(discarded.error);
+    const openingCardId = discarded.state.previousDiscard[0].id;
+    const drawn = drawFromPreviousDiscard(discarded.state, player.id, openingCardId);
+    expect(drawn.ok).toBe(true);
+    if (!drawn.ok) return;
+    expect(drawn.state.players.find((candidate) => candidate.id === player.id)?.hand)
+      .toContainEqual(expect.objectContaining({ id: openingCardId }));
   });
 
   it("draws only one selected card from the immediately previous discard", () => {
@@ -137,7 +177,29 @@ describe("declaration and scoring", () => {
     const next = startNextRound(result.state, fixedRandom);
     expect(next.ok && next.state.roundNumber).toBe(2);
     if (!next.ok) return;
+    expect(currentPlayer(next.state).id).toBe("player-2");
+    expect(next.state.previousDiscard).toHaveLength(1);
     const ended = endGame(next.state);
     expect(ended.ok && ended.state.status).toBe("gameComplete");
+  });
+
+  it("lets a successful round winner start the next round", () => {
+    const state = withHands([[card("6")], [card("8")], [card("K"), card("3", "hearts")]]);
+    const completed = declare(state, "player-1");
+    if (!completed.ok) throw new Error(completed.error);
+    const next = startNextRound(completed.state, () => 0.99);
+    expect(next.ok).toBe(true);
+    if (!next.ok) return;
+    expect(currentPlayer(next.state).id).toBe("player-1");
+  });
+
+  it("uses seating order to break a lowest-hand tie for the next starter", () => {
+    const state = withHands([[card("8")], [card("8", "hearts")], [card("K"), card("9", "hearts")]]);
+    const completed = declare(state, "player-1");
+    if (!completed.ok) throw new Error(completed.error);
+    const next = startNextRound(completed.state, () => 0.99);
+    expect(next.ok).toBe(true);
+    if (!next.ok) return;
+    expect(currentPlayer(next.state).id).toBe("player-1");
   });
 });
