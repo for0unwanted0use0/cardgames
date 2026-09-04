@@ -59,6 +59,8 @@ test("two private-discard players can join, start, discard, and draw", async ({ 
     await expect(host.page.getByText(`Guest${stamp}`, { exact: true })).toBeVisible();
     await host.page.getByRole("button", { name: /Start game/ }).click();
 
+    await expect(host.page.locator(".gameplay-stage")).toBeVisible();
+    await expect(guest.page.locator(".gameplay-stage")).toBeVisible();
     const hostStarts = await host.page.getByText("Your turn", { exact: true }).isVisible();
     const actor = hostStarts ? host.page : guest.page;
     const nextPlayer = hostStarts ? guest.page : host.page;
@@ -77,6 +79,15 @@ test("two private-discard players can join, start, discard, and draw", async ({ 
     await expect(actor.getByText("cards hidden", { exact: true })).toBeVisible();
     await assertNoPageOverflow(host.page);
     await assertNoPageOverflow(guest.page);
+    actor.once("dialog", async (dialog) => dialog.dismiss());
+    await actor.getByRole("button", { name: "Leave room and return home" }).click();
+    await expect(actor.locator(".gameplay-stage")).toBeVisible();
+    actor.once("dialog", async (dialog) => {
+      expect(dialog.message()).toContain("Leave this room and return home?");
+      await dialog.accept();
+    });
+    await actor.getByRole("button", { name: "Leave room and return home" }).click();
+    await expect(actor.getByRole("button", { name: "Create private table" })).toBeVisible();
   } finally {
     await host.context.close();
     await guest.context.close();

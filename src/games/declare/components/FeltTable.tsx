@@ -48,12 +48,13 @@ export function PlayerSeat({ name, cardCount, score, isCurrent, isViewer = false
 
 type ResultPlayer = { id: string; name: string; score: number };
 
-export function RoundResult({ result, players, isHost, onNextRound, onEndGame }: {
+export function RoundResult({ result, players, isHost, onNextRound, onEndGame, onLeave }: {
   result: DeclarationResult;
   players: ResultPlayer[];
   isHost: boolean;
   onNextRound: () => void;
   onEndGame: () => void;
+  onLeave: () => void;
 }) {
   const declarer = players.find((player) => player.id === result.declarerId);
   return <section className="round-result" role="dialog" aria-modal="false" aria-labelledby="round-result-title">
@@ -63,6 +64,6 @@ export function RoundResult({ result, players, isHost, onNextRound, onEndGame }:
     <div className="result-scores">
       {players.map((player) => <div key={player.id}><span>{player.name}</span><strong>+{result.roundScores[player.id]}</strong><small>Total {player.score}</small></div>)}
     </div>
-    {isHost ? <div className="actions"><button onClick={onNextRound}>Next round</button><button className="secondary" onClick={onEndGame}>End game</button></div> : <p className="subtle">Waiting for the host to continue…</p>}
+    {isHost ? <div className="actions"><button onClick={onNextRound}>Next round</button><button className="secondary" onClick={onEndGame}>End game</button><button className="result-exit" onClick={onLeave}>Leave table</button></div> : <div className="result-waiting"><p>Waiting for the host to continue…</p><button className="result-exit" onClick={onLeave}>Leave table</button></div>}
   </section>;
 }
