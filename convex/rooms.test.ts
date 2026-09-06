@@ -50,3 +50,40 @@ describe("voice seat authorization", () => {
       .rejects.toThrow("Room not found");
   });
 });
+
+describe("room leaving", () => {
+  it("removes a lobby seat and transfers hosting", async () => {
+    const t = await roomWithGuest();
+    await t.mutation(api.rooms.leave, { code: "AB12CD", seatToken: hostToken });
+    const view = await t.query(api.rooms.view, { code: "AB12CD", seatToken: guestToken });
+    expect(view.kind).toBe("lobby");
+    expect(view.hostPlayerId).toBe("player-2");
+    expect(view.players).toEqual([{ id: "player-2", name: "Bob" }]);
+  });
+
+  it("reuses an available player number without colliding after the host leaves", async () => {
+    const t = await roomWithGuest();
+    await t.mutation(api.rooms.leave, { code: "AB12CD", seatToken: hostToken });
+    const result = await t.mutation(api.rooms.join, {
+      code: "AB12CD", playerName: "Cara", seatToken: "cara-seat-token-123456789012",
+    });
+    expect(result.playerId).toBe("player-1");
+    const view = await t.query(api.rooms.view, { code: "AB12CD", seatToken: guestToken });
+    expect(view.kind).toBe("lobby");
+    if (view.kind !== "lobby") throw new Error("Expected a lobby view.");
+    expect(view.players.map((player) => player.id)).toEqual(["player-2", "player-1"]);
+  });
+
+  it("ends a two-player game by walkover when one player leaves", async () => {
+    const t = await roomWithGuest();
+    await t.mutation(api.rooms.start, { code: "AB12CD", seatToken: hostToken });
+    await t.mutation(api.rooms.leave, { code: "AB12CD", seatToken: guestToken });
+    const view = await t.query(api.rooms.view, { code: "AB12CD", seatToken: hostToken });
+    expect(view.kind).toBe("game");
+    if (view.kind !== "game") throw new Error("Expected a game view.");
+    expect(view.status).toBe("gameComplete");
+    expect(view.completionReason).toBe("walkover");
+    expect(view.winnerIds).toEqual(["player-1"]);
+    expect(view.lastEvent?.message).toBe("Bob left the table.");
+  });
+});

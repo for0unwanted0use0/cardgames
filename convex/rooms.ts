@@ -1,6 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { createGame, endGame, startNextRound } from "../src/games/declare/engine/actions";
+import { createGame, endGame, forfeitPlayer, startNextRound } from "../src/games/declare/engine/actions";
 import type { GameState } from "../src/games/declare/engine/state";
 import { executePlayerCommand, type PlayerCommand } from "../src/games/declare/multiplayer/commands";
 import { createPlayerView, type DiscardVisibility } from "../src/games/declare/multiplayer/views";
@@ -65,7 +65,10 @@ export const join = mutation({
     if (seats.some((seat) => seat.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new ConvexError("That player name is already used in this room.");
     const existingToken = seats.find((seat) => seat.token === token);
     if (existingToken) return { code, playerId: existingToken.playerId };
-    const playerId = `player-${seats.length + 1}`;
+    const occupiedPlayerIds = new Set(seats.map((seat) => seat.playerId));
+    let playerNumber = 1;
+    while (occupiedPlayerIds.has(`player-${playerNumber}`)) playerNumber += 1;
+    const playerId = `player-${playerNumber}`;
     await ctx.db.insert("seats", { roomId: room._id, playerId, name, token, joinedAt: Date.now() });
     return { code, playerId };
   },
@@ -108,8 +111,41 @@ export const view = query({
     const discardVisibility: DiscardVisibility = room.discardVisibility ?? "public";
     return {
       kind: "game" as const, hostPlayerId: room.hostPlayerId, discardVisibility,
+      lastEvent: room.lastEvent ?? null,
       ...createPlayerView(room.gameState as GameState, seat.playerId, room.revision, discardVisibility),
     };
+  },
+});
+
+export const leave = mutation({
+  args: { code: v.string(), seatToken: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { room, seat } = await roomAndSeat(ctx, args.code, args.seatToken);
+    const seats = await ctx.db.query("seats").withIndex("by_room", (q) => q.eq("roomId", room._id)).take(6);
+    const remainingSeats = seats
+      .filter((candidate) => candidate._id !== seat._id)
+      .sort((a, b) => a.playerId.localeCompare(b.playerId, undefined, { numeric: true }));
+    if (!room.gameState) {
+      await ctx.db.delete("seats", seat._id);
+      if (remainingSeats.length === 0) await ctx.db.delete("rooms", room._id);
+      else if (seat.playerId === room.hostPlayerId) await ctx.db.patch(room._id, { hostPlayerId: remainingSeats[0].playerId });
+      return null;
+    }
+    const state = room.gameState as GameState;
+    if (state.status !== "gameComplete") {
+      const result = forfeitPlayer(state, seat.playerId);
+      if (!result.ok) throw new ConvexError(result.error);
+      await ctx.db.patch(room._id, {
+        gameState: result.state,
+        status: result.state.status,
+        revision: room.revision + 1,
+        ...(seat.playerId === room.hostPlayerId && remainingSeats[0] ? { hostPlayerId: remainingSeats[0].playerId } : {}),
+        lastEvent: { kind: "playerLeft", message: `${seat.name} left the table.`, createdAt: Date.now() },
+      });
+    }
+    await ctx.db.delete("seats", seat._id);
+    return null;
   },
 });
 

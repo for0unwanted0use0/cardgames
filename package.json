@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@livekit/components-react": "^2.9.24",
+    "@next/third-parties": "^16.3.4",
     "convex": "^1.44.0",
     "livekit-client": "^2.22.1",
     "livekit-server-sdk": "^2.18.0",

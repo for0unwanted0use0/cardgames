@@ -36,6 +36,7 @@ export type GameState = {
   declarationResult: DeclarationResult | null;
   rounds: RoundRecord[];
   winnerIds: string[];
+  completionReason?: "score" | "walkover";
 };
 
 export type ActionResult =

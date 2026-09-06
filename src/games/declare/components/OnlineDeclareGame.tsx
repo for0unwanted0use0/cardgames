@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import { calculateHandScore } from "../engine/scoring";
@@ -11,6 +11,7 @@ import { PlayerSeat, PlayingCard, RevealedHands, RoundResult } from "./FeltTable
 import OnlineScoreboard from "./OnlineScoreboard";
 import TurnAlertControl from "./TurnAlertControl";
 import VoicePanel from "./VoicePanel";
+import { trackEvent } from "../../../lib/analytics";
 
 type Credentials = { code: string; seatToken: string };
 const STORAGE_KEY = "declare-online-seat-v1";
@@ -25,18 +26,29 @@ export default function OnlineDeclareGame() {
   const [selected, setSelected] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const lastTrackedResult = useRef("");
   const createRoom = useMutation(api.rooms.create);
   const joinRoom = useMutation(api.rooms.join);
   const startRoom = useMutation(api.rooms.start);
   const play = useMutation(api.rooms.play);
   const advanceRound = useMutation(api.rooms.advanceRound);
   const finish = useMutation(api.rooms.finish);
+  const leaveRoom = useMutation(api.rooms.leave);
   const room = useQuery(api.rooms.view, credentials ? { code: credentials.code, seatToken: credentials.seatToken } : "skip");
 
   useEffect(() => {
     try { setCredentials(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null")); } catch { /* ignore invalid local data */ }
     setLoaded(true);
   }, []);
+
+  useEffect(() => {
+    if (!room || room.kind !== "game" || room.viewerPlayerId !== room.hostPlayerId || (room.status !== "roundComplete" && room.status !== "gameComplete")) return;
+    const key = `${room.status}:${room.roundNumber}:${room.revision}`;
+    if (lastTrackedResult.current === key) return;
+    lastTrackedResult.current = key;
+    if (room.status === "roundComplete") trackEvent("round_complete", { round_number: room.roundNumber, player_count: room.players.length });
+    else trackEvent("game_complete", { round_number: room.roundNumber, player_count: room.players.length, completion_reason: room.completionReason ?? "score" });
+  }, [room]);
 
   function remember(next: Credentials) { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); setCredentials(next); }
   async function perform(action: () => Promise<unknown>) {
@@ -45,15 +57,22 @@ export default function OnlineDeclareGame() {
   }
   async function create() {
     const code = newCode(); const seatToken = newToken();
-    await perform(async () => { await createRoom({ code, playerName: name, seatToken, discardVisibility }); remember({ code, seatToken }); });
+    await perform(async () => { await createRoom({ code, playerName: name, seatToken, discardVisibility }); remember({ code, seatToken }); trackEvent("create_room", { discard_visibility: discardVisibility }); });
   }
   async function join() {
     const code = joinCode.trim().toUpperCase(); const seatToken = newToken();
-    await perform(async () => { await joinRoom({ code, playerName: name, seatToken }); remember({ code, seatToken }); });
+    await perform(async () => { await joinRoom({ code, playerName: name, seatToken }); remember({ code, seatToken }); trackEvent("join_group", { method: "room_code" }); });
   }
   function leave() { localStorage.removeItem(STORAGE_KEY); setCredentials(null); setSelected([]); setMessage(""); }
-  function confirmLeave() {
-    if (window.confirm("Leave this room and return home? Your seat will be forgotten on this device.")) leave();
+  async function confirmLeave() {
+    if (!credentials) return;
+    const forfeits = room && room.kind === "game" && room.status !== "gameComplete";
+    const question = forfeits
+      ? "Leave this game? This counts as a forfeit and cannot be undone."
+      : "Leave this room and return home?";
+    if (!window.confirm(question)) return;
+    try { setMessage(""); await leaveRoom({ code: credentials.code, seatToken: credentials.seatToken }); trackEvent("leave_game", { game_status: room?.kind === "game" ? room.status : "waiting", forfeited: Boolean(forfeits) }); leave(); }
+    catch (error) { setMessage(playerFacingError(error)); }
   }
   async function copyCode(code: string) {
     try { await navigator.clipboard.writeText(code); setMessage("Room code copied."); }
@@ -81,7 +100,7 @@ export default function OnlineDeclareGame() {
     return <section className="game-panel waiting-lobby">
       <header className="lobby-room-header"><div><p className="eyebrow">Waiting room</p><h1>Gather at the table</h1></div><button className="room-code-button" onClick={() => copyCode(room.code)} aria-label={`Copy room code ${room.code}`}><small>Room code · tap to copy</small><strong>{room.code}</strong></button></header>
       <div className="waiting-layout"><section><h2>Players seated</h2><div className="lobby-list">{room.players.map((player, index) => <div key={player.id}><span className="seat-initials">{player.name[0]?.toUpperCase()}</span><strong>{player.name}</strong><small>{player.id === room.hostPlayerId ? "Host" : `Seat ${index + 1}`}</small></div>)}</div></section><aside className="lobby-settings"><p className="eyebrow">Table setting</p><strong>{room.discardVisibility === "nextPlayerOnly" ? "Private discard" : "Public discard"}</strong><p>{room.discardVisibility === "nextPlayerOnly" ? "Only the next player sees card identities." : "Everyone sees the eligible discard."}</p></aside></div>
-      {isHost ? <div className="lobby-actions"><button disabled={room.players.length < 2} onClick={() => perform(() => startRoom({ code: credentials.code, seatToken: credentials.seatToken }))}>Start game · {room.players.length}/6</button>{room.players.length < 2 && <span className="subtle">At least two players are needed.</span>}</div> : <p className="turn-banner waiting"><strong>Waiting for the host</strong><span>The game will begin automatically on this screen.</span></p>}
+      {isHost ? <div className="lobby-actions"><button disabled={room.players.length < 2} onClick={() => perform(async () => { await startRoom({ code: credentials.code, seatToken: credentials.seatToken }); trackEvent("game_start", { player_count: room.players.length, discard_visibility: room.discardVisibility }); })}>Start game · {room.players.length}/6</button>{room.players.length < 2 && <span className="subtle">At least two players are needed.</span>}</div> : <p className="turn-banner waiting"><strong>Waiting for the host</strong><span>The game will begin automatically on this screen.</span></p>}
       <button className="quiet danger lobby-leave" onClick={confirmLeave}>Leave this table</button>{message && <p className="error" role="alert">{message}</p>}
     </section>;
   }
@@ -115,7 +134,8 @@ export default function OnlineDeclareGame() {
     </main></div></div>
     <aside className="utility-rail" aria-label="Game information"><OnlineScoreboard roundNumber={room.roundNumber} players={room.players} completedRounds={room.completedRounds} /><VoicePanel roomCode={credentials.code} seatToken={credentials.seatToken} /><details className="game-details"><summary><span>Table information</span><span aria-hidden="true">⌄</span></summary><dl><div><dt>Discard visibility</dt><dd>{room.discardVisibility === "nextPlayerOnly" ? "Next player only" : "Visible to all"}</dd></div></dl><TurnAlertControl isTurn={isTurn} activeGame={activeGame} /><button className="quiet danger" onClick={confirmLeave}>Forget room on this device</button></details></aside>
     {room.status === "roundComplete" && room.declarationResult && <RoundResult result={room.declarationResult} players={room.players} isHost={isHost} onNextRound={() => perform(() => advanceRound({ code: credentials.code, seatToken: credentials.seatToken, expectedRevision: room.revision }))} onEndGame={() => perform(() => finish({ code: credentials.code, seatToken: credentials.seatToken, expectedRevision: room.revision }))} onLeave={confirmLeave} />}
-    {room.status === "gameComplete" && <section className="round-result game-complete" role="status"><p className="eyebrow">Final result</p><h2>Game complete</h2><p>Winner{room.winnerIds.length === 1 ? "" : "s"}: <strong>{room.players.filter((player) => room.winnerIds.includes(player.id)).map((player) => player.name).join(", ")}</strong></p><RevealedHands players={room.players} /><button className="return-home" onClick={confirmLeave}>Return home</button></section>}
+    {room.lastEvent && <p className="room-event" role="status">{room.lastEvent.message}</p>}
+    {room.status === "gameComplete" && <section className="round-result game-complete celebration" role="status"><div className="confetti" aria-hidden="true">{Array.from({ length: 18 }, (_, index) => <i key={index} />)}</div><p className="eyebrow">Final result</p><h2>{room.completionReason === "walkover" ? "Victory by walkover" : "Game complete"}</h2><p>Winner{room.winnerIds.length === 1 ? "" : "s"}: <strong>{room.players.filter((player) => room.winnerIds.includes(player.id)).map((player) => player.name).join(", ")}</strong></p><RevealedHands players={room.players} /><button className="return-home" onClick={confirmLeave}>Return home</button></section>}
     {message && <p className="error floating-error" role="alert">{message}</p>}
   </section>;
 }

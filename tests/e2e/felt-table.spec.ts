@@ -36,8 +36,21 @@ test("lobby remains usable at all target widths", async ({ page }) => {
   }
 });
 
+test("the first-visit guide can be dismissed and reopened", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "You’ll learn it in one round" })).toBeVisible();
+  await page.getByRole("button", { name: "Got it — let’s play" }).click();
+  await expect(page.getByRole("heading", { name: "You’ll learn it in one round" })).toBeHidden();
+  await page.getByRole("button", { name: "How to play" }).click();
+  await expect(page.getByRole("heading", { name: "You’ll learn it in one round" })).toBeVisible();
+  await page.getByRole("button", { name: "Got it — let’s play" }).click();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "You’ll learn it in one round" })).toBeHidden();
+});
+
 async function newPlayer(browser: Browser, name: string) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await context.addInitScript(() => localStorage.setItem("declare-guide-v1", "seen"));
   const page = await context.newPage();
   await page.goto("/");
   await page.getByLabel("Your name").fill(name);
@@ -90,11 +103,13 @@ test("two private-discard players can join, start, discard, and draw", async ({ 
     await actor.getByRole("button", { name: "Leave room and return home" }).click();
     await expect(actor.locator(".gameplay-stage")).toBeVisible();
     actor.once("dialog", async (dialog) => {
-      expect(dialog.message()).toContain("Leave this room and return home?");
+      expect(dialog.message()).toContain("counts as a forfeit");
       await dialog.accept();
     });
     await actor.getByRole("button", { name: "Leave room and return home" }).click();
     await expect(actor.getByRole("button", { name: "Create private table" })).toBeVisible();
+    await expect(nextPlayer.getByRole("heading", { name: "Victory by walkover" })).toBeVisible();
+    await expect(nextPlayer.getByText(/left the table/)).toBeVisible();
   } finally {
     await host.context.close();
     await guest.context.close();

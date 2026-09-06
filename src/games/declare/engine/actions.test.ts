@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canDeclare, createGame, declare, discardCards, drawFromPreviousDiscard,
-  drawFromStock, endGame, startNextRound,
+  drawFromStock, endGame, forfeitPlayer, startNextRound,
 } from "./actions";
 import { createDeck } from "./deck";
 import { allLocatedCards, currentPlayer, type GameState } from "./state";
@@ -201,5 +201,34 @@ describe("declaration and scoring", () => {
     expect(next.ok).toBe(true);
     if (!next.ok) return;
     expect(currentPlayer(next.state).id).toBe("player-1");
+  });
+});
+
+describe("player forfeiture", () => {
+  it("awards a two-player game by walkover and preserves every card", () => {
+    const state = createGame(["A", "B"], fixedRandom);
+    const leaving = currentPlayer(state);
+    const result = forfeitPlayer(state, leaving.id);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.state.status).toBe("gameComplete");
+    expect(result.state.completionReason).toBe("walkover");
+    expect(result.state.winnerIds).toEqual([result.state.players[0].id]);
+    expect(allLocatedCards(result.state)).toHaveLength(55);
+  });
+
+  it("continues a larger game and advances when the current player leaves while drawing", () => {
+    const state = createGame(["A", "B", "C"], fixedRandom);
+    const leaving = currentPlayer(state);
+    const discarded = discardCards(state, leaving.id, [leaving.hand[0].id]);
+    if (!discarded.ok) throw new Error(discarded.error);
+    const result = forfeitPlayer(discarded.state, leaving.id);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.state.status).toBe("playing");
+    expect(result.state.players).toHaveLength(2);
+    expect(currentPlayer(result.state).id).not.toBe(leaving.id);
+    expect(result.state.pendingDiscard).toEqual([]);
+    expect(allLocatedCards(result.state)).toHaveLength(55);
   });
 });

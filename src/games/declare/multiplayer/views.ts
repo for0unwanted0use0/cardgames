@@ -35,6 +35,7 @@ export type PlayerGameView = {
   status: GameStatus;
   declarationResult: DeclarationResult | null;
   winnerIds: string[];
+  completionReason?: "score" | "walkover";
 };
 
 export function createPlayerView(
@@ -72,5 +73,6 @@ export function createPlayerView(
     status: state.status,
     declarationResult: state.declarationResult,
     winnerIds: state.winnerIds,
+    ...(state.completionReason ? { completionReason: state.completionReason } : {}),
   };
 }

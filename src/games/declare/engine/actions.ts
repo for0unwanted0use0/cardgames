@@ -160,7 +160,7 @@ export function declare(state: GameState, playerId: string): ActionResult {
 export function startNextRound(state: GameState, random: RandomSource = Math.random): ActionResult {
   if (state.status !== "roundComplete") return failure(state, "Complete the current round before starting another.");
   if (!state.declarationResult) return failure(state, "The completed round has no result.");
-  const lowestHandScore = Math.min(...Object.values(state.declarationResult.handScores));
+  const lowestHandScore = Math.min(...state.playerOrder.map((playerId) => state.declarationResult!.handScores[playerId]));
   const startingPlayerId = state.playerOrder.find(
     (playerId) => state.declarationResult?.handScores[playerId] === lowestHandScore,
   );
@@ -180,5 +180,37 @@ export function endGame(state: GameState): ActionResult {
     ...state,
     status: "gameComplete",
     winnerIds: state.players.filter((player) => player.score === lowest).map((player) => player.id),
+    completionReason: "score",
+  });
+}
+
+export function forfeitPlayer(state: GameState, playerId: string): ActionResult {
+  if (state.status === "gameComplete") return failure(state, "This game has already ended.");
+  const leavingPlayer = state.players.find((player) => player.id === playerId);
+  if (!leavingPlayer) return failure(state, "This player is not part of the game.");
+  const oldCurrentPlayerId = state.playerOrder[state.currentPlayerIndex];
+  const playerOrder = state.playerOrder.filter((id) => id !== playerId);
+  const players = state.players.filter((player) => player.id !== playerId);
+  if (players.length === 0) return failure(state, "The last player cannot forfeit an unfinished game.");
+  const forfeitedCurrentTurn = oldCurrentPlayerId === playerId;
+  const currentPlayerIndex = forfeitedCurrentTurn
+    ? state.currentPlayerIndex % playerOrder.length
+    : playerOrder.indexOf(oldCurrentPlayerId);
+  const pendingDiscard = forfeitedCurrentTurn ? [] : state.pendingDiscard;
+  const discardPool = [
+    ...state.discardPool,
+    ...leavingPlayer.hand,
+    ...(forfeitedCurrentTurn ? state.pendingDiscard : []),
+  ];
+  return success({
+    ...state,
+    players,
+    playerOrder,
+    currentPlayerIndex,
+    discardPool,
+    pendingDiscard,
+    status: players.length === 1 ? "gameComplete" : forfeitedCurrentTurn && state.status === "awaitingDraw" ? "playing" : state.status,
+    winnerIds: players.length === 1 ? [players[0].id] : state.winnerIds,
+    completionReason: players.length === 1 ? "walkover" : state.completionReason,
   });
 }

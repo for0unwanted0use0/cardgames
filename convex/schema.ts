@@ -9,6 +9,7 @@ export default defineSchema({
     revision: v.number(),
     discardVisibility: v.optional(v.union(v.literal("public"), v.literal("nextPlayerOnly"))),
     gameState: v.optional(v.any()),
+    lastEvent: v.optional(v.object({ kind: v.literal("playerLeft"), message: v.string(), createdAt: v.number() })),
     createdAt: v.number(),
   }).index("by_code", ["code"]),
   seats: defineTable({
