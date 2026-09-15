@@ -11,7 +11,8 @@ export default function Home() {
       <span className="brand">Card Table</span>
       <button className={view === "online" ? "active" : ""} onClick={() => setView("online")}>Online Declare</button>
       <button className={view === "scorepad" ? "active" : ""} onClick={() => setView("scorepad")}>Scorepads</button>
+      <GameGuide settingsAvailable={view === "online"} />
     </nav>
-    {view === "online" ? <><OnlineDeclareGame /><GameGuide /></> : <iframe className="scorepad" src="/card-table.html" title="Declare and Judgement scorepads" />}
+    {view === "online" ? <OnlineDeclareGame /> : <iframe className="scorepad" src="/card-table.html" title="Declare and Judgement scorepads" />}
   </main>;
 }

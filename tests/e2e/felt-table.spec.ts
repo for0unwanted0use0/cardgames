@@ -37,13 +37,32 @@ test("lobby remains usable at all target widths", async ({ page }) => {
 });
 
 test("the first-visit guide can be dismissed and reopened", async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 546 });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "You’ll learn it in one round" })).toBeVisible();
+  const guideBounds = await page.locator(".game-guide").evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { top: bounds.top, bottom: bounds.bottom, viewportHeight: window.innerHeight };
+  });
+  expect(guideBounds.top).toBeGreaterThanOrEqual(0);
+  expect(guideBounds.bottom).toBeLessThanOrEqual(guideBounds.viewportHeight);
+  await expect(page.getByRole("button", { name: "Close how to play" })).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Got it — let’s play" })).toBeInViewport();
   await page.getByRole("button", { name: "Got it — let’s play" }).click();
   await expect(page.getByRole("heading", { name: "You’ll learn it in one round" })).toBeHidden();
+  await expect(page.locator(".guide-launch")).toHaveCount(0);
+  await page.getByRole("button", { name: "Open app menu" }).click();
   await page.getByRole("button", { name: "How to play" }).click();
   await expect(page.getByRole("heading", { name: "You’ll learn it in one round" })).toBeVisible();
-  await page.getByRole("button", { name: "Got it — let’s play" }).click();
+  const closeGuide = page.getByRole("button", { name: "Close how to play" });
+  await expect(closeGuide).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.getByRole("button", { name: "Got it — let’s play" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(closeGuide).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "You’ll learn it in one round" })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Open app menu" })).toBeFocused();
   await page.reload();
   await expect(page.getByRole("heading", { name: "You’ll learn it in one round" })).toBeHidden();
 });
@@ -66,6 +85,12 @@ test("two private-discard players can join, start, discard, and draw", async ({ 
     await host.page.getByRole("button", { name: "Create private table" }).click();
     const roomCode = (await host.page.locator(".room-code-button strong").textContent())?.trim();
     expect(roomCode).toMatch(/^[A-Z0-9]{6}$/);
+    await host.page.locator(".room-code-button").click();
+    const copyNotice = host.page.locator(".notice");
+    await expect(copyNotice).toBeVisible();
+    const firstNoticeId = await copyNotice.getAttribute("data-notice-id");
+    await host.page.locator(".room-code-button").click();
+    await expect.poll(() => copyNotice.getAttribute("data-notice-id")).not.toBe(firstNoticeId);
 
     await guest.page.getByLabel("Room code").fill(roomCode!);
     await guest.page.getByRole("button", { name: "Join table" }).click();
@@ -83,8 +108,38 @@ test("two private-discard players can join, start, discard, and draw", async ({ 
     await expect(nextPlayer.locator(".turn-banner.waiting")).toBeVisible();
     await assertGameplayFitsViewport(actor);
     await assertGameplayFitsViewport(nextPlayer);
-    await actor.locator(".hand-cards button.playing-card").first().click();
-    await expect(actor.locator(".hand-cards button.playing-card").first()).toHaveAttribute("aria-pressed", "true");
+    const handCards = actor.locator(".hand-cards button.playing-card");
+    const cardBounds = await handCards.evaluateAll((cards) => cards.map((card) => {
+      const bounds = card.getBoundingClientRect(); return { left: bounds.left, right: bounds.right };
+    }));
+    expect(cardBounds.every((bounds, index) => index === 0 || bounds.left >= cardBounds[index - 1].right)).toBe(true);
+
+    const firstCardText = await handCards.first().textContent();
+    await actor.getByRole("button", { name: "Arrange", exact: true }).click();
+    await handCards.first().click();
+    await actor.getByRole("button", { name: "Right →" }).click();
+    await expect(handCards.nth(1)).toHaveText(firstCardText!);
+    await actor.getByRole("button", { name: "Done", exact: true }).click();
+
+    const cardTexts = await handCards.allTextContents();
+    const firstRank = cardTexts[0].replace(/[♣♦♥♠]/gu, "");
+    const differentRankIndex = cardTexts.findIndex((text, index) => index > 0 && text.replace(/[♣♦♥♠]/gu, "") !== firstRank);
+    expect(differentRankIndex).toBeGreaterThan(0);
+    await handCards.first().click();
+    await handCards.nth(differentRankIndex).click();
+    await actor.getByRole("button", { name: /Discard selected/ }).click();
+    const errorNotice = actor.locator(".notice[role='alert']");
+    await expect(errorNotice).toContainText(/two-card discard/i);
+    await expect(errorNotice).toBeHidden({ timeout: 7_500 });
+    await actor.getByRole("button", { name: /Discard selected/ }).click();
+    await expect(errorNotice).toBeVisible();
+    await actor.getByRole("button", { name: "Dismiss message" }).click();
+    await expect(errorNotice).toBeHidden();
+    await handCards.first().click();
+    await handCards.nth(differentRankIndex).click();
+
+    await handCards.first().click();
+    await expect(handCards.first()).toHaveAttribute("aria-pressed", "true");
     await actor.getByRole("button", { name: /Discard selected/ }).click();
     await expect(actor.getByText("Choose your draw", { exact: true })).toBeVisible();
     await actor.getByRole("button", { name: "Draw from stock" }).last().click();
