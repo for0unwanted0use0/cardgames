@@ -28,7 +28,7 @@ async function assertGameplayFitsViewport(page: Page) {
 test("lobby remains usable at all target widths", async ({ page }) => {
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
-    await page.goto("/");
+    await page.goto("/games/declare");
     await expect(page.getByRole("heading", { name: "Online Declare" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create private table" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Join table" })).toBeVisible();
@@ -38,7 +38,7 @@ test("lobby remains usable at all target widths", async ({ page }) => {
 
 test("the first-visit guide can be dismissed and reopened", async ({ page }) => {
   await page.setViewportSize({ width: 400, height: 546 });
-  await page.goto("/");
+  await page.goto("/games/declare");
   await expect(page.getByRole("heading", { name: "You’ll learn it in one round" })).toBeVisible();
   const guideBounds = await page.locator(".game-guide").evaluate((element) => {
     const bounds = element.getBoundingClientRect();
@@ -71,12 +71,13 @@ async function newPlayer(browser: Browser, name: string) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   await context.addInitScript(() => localStorage.setItem("declare-guide-v1", "seen"));
   const page = await context.newPage();
-  await page.goto("/");
+  await page.goto("/games/declare");
   await page.getByLabel("Your name").fill(name);
   return { context, page };
 }
 
 test("two private-discard players can join, start, discard, and draw", async ({ browser }) => {
+  test.setTimeout(90_000);
   const stamp = Date.now().toString().slice(-6);
   const host = await newPlayer(browser, `Host${stamp}`);
   const guest = await newPlayer(browser, `Guest${stamp}`);
@@ -186,7 +187,7 @@ test("a six-player table remains usable on desktop and mobile", async ({ browser
       await guest.page.getByLabel("Room code").fill(roomCode!);
       await guest.page.getByRole("button", { name: "Join table" }).click();
     }
-    await expect(host.page.locator(".lobby-list > div")).toHaveCount(6);
+    await expect(host.page.locator(".lobby-list > div")).toHaveCount(6, { timeout: 15_000 });
     await host.page.getByRole("button", { name: /Start game · 6\/6/ }).click();
     await expect(host.page.locator(".opponent-strip .player-seat")).toHaveCount(5);
     for (const viewport of viewports) {

@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as dehlaRooms from "../dehlaRooms.js";
+import type * as dehlaValidators from "../dehlaValidators.js";
 import type * as rooms from "../rooms.js";
 
 import type {
@@ -17,6 +19,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  dehlaRooms: typeof dehlaRooms;
+  dehlaValidators: typeof dehlaValidators;
   rooms: typeof rooms;
 }>;
 

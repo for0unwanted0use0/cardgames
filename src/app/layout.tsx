@@ -4,8 +4,8 @@ import "./globals.css";
 import ConvexClientProvider from "./ConvexClientProvider";
 
 export const metadata: Metadata = {
-  title: "Card Table · Online Declare",
-  description: "Local card-game scorepads and playable games",
+  title: "Cardgames · Declare and Dehla Pakad",
+  description: "Multiplayer Indian card games and local scorecards",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

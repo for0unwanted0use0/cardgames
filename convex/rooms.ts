@@ -42,7 +42,7 @@ export const create = mutation({
     if (existing) throw new ConvexError("That room code is already in use.");
     const playerId = "player-1";
     const roomId = await ctx.db.insert("rooms", {
-      code, hostPlayerId: playerId, status: "waiting", revision: 0,
+      code, gameType: "declare", hostPlayerId: playerId, status: "waiting", revision: 0,
       discardVisibility: args.discardVisibility, createdAt: Date.now(),
     });
     await ctx.db.insert("seats", { roomId, playerId, name, token, joinedAt: Date.now() });
@@ -59,6 +59,7 @@ export const join = mutation({
     const token = validToken(args.seatToken);
     const room = await ctx.db.query("rooms").withIndex("by_code", (q) => q.eq("code", code)).unique();
     if (!room) throw new ConvexError("Room not found.");
+    if (room.gameType && room.gameType !== "declare") throw new ConvexError("That code belongs to a different card game.");
     if (room.status !== "waiting") throw new ConvexError("This game has already started.");
     const seats = await ctx.db.query("seats").withIndex("by_room", (q) => q.eq("roomId", room._id)).take(7);
     if (seats.length >= 6) throw new ConvexError("This room is full.");
@@ -98,6 +99,7 @@ export const view = query({
     }
     const room = await ctx.db.query("rooms").withIndex("by_code", (q) => q.eq("code", code)).unique();
     if (!room) return { kind: "unavailable" as const, code };
+    if (room.gameType && room.gameType !== "declare") return { kind: "unavailable" as const, code };
     const seat = await ctx.db.query("seats").withIndex("by_room_token", (q) => q.eq("roomId", room._id).eq("token", token)).unique();
     if (!seat) return { kind: "unavailable" as const, code };
     const seats = await ctx.db.query("seats").withIndex("by_room", (q) => q.eq("roomId", room._id)).take(6);
@@ -122,6 +124,7 @@ export const leave = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const { room, seat } = await roomAndSeat(ctx, args.code, args.seatToken);
+    if (room.gameType && room.gameType !== "declare") throw new ConvexError("That code belongs to a different card game.");
     const seats = await ctx.db.query("seats").withIndex("by_room", (q) => q.eq("roomId", room._id)).take(6);
     const remainingSeats = seats
       .filter((candidate) => candidate._id !== seat._id)
@@ -163,6 +166,7 @@ export const start = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const { room, seat } = await roomAndSeat(ctx, args.code, args.seatToken);
+    if (room.gameType && room.gameType !== "declare") throw new ConvexError("That code belongs to a different card game.");
     if (seat.playerId !== room.hostPlayerId) throw new ConvexError("Only the host may start the game.");
     if (room.status !== "waiting") throw new ConvexError("This room is not waiting to start.");
     const seats = await ctx.db.query("seats").withIndex("by_room", (q) => q.eq("roomId", room._id)).take(6);
@@ -179,6 +183,7 @@ export const play = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const { room, seat } = await roomAndSeat(ctx, args.code, args.seatToken);
+    if (room.gameType && room.gameType !== "declare") throw new ConvexError("That code belongs to a different card game.");
     if (!room.gameState) throw new ConvexError("The game has not started.");
     const result = executePlayerCommand(
       { revision: room.revision, state: room.gameState as GameState },
@@ -196,6 +201,7 @@ export const advanceRound = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const { room, seat } = await roomAndSeat(ctx, args.code, args.seatToken);
+    if (room.gameType && room.gameType !== "declare") throw new ConvexError("That code belongs to a different card game.");
     if (seat.playerId !== room.hostPlayerId) throw new ConvexError("Only the host may advance the round.");
     if (args.expectedRevision !== room.revision) throw new ConvexError("Game state changed; refresh and try again.");
     const result = startNextRound(room.gameState as GameState, Math.random);
@@ -210,6 +216,7 @@ export const finish = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const { room, seat } = await roomAndSeat(ctx, args.code, args.seatToken);
+    if (room.gameType && room.gameType !== "declare") throw new ConvexError("That code belongs to a different card game.");
     if (seat.playerId !== room.hostPlayerId) throw new ConvexError("Only the host may end the game.");
     if (args.expectedRevision !== room.revision) throw new ConvexError("Game state changed; refresh and try again.");
     const result = endGame(room.gameState as GameState);
