@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useConvexConnectionState, useMutation, useQuery } from "convex/react";
 import { api } from "../../../../convex/_generated/api";
 import VoicePanel from "../../declare/components/VoicePanel";
 import { rankLabel } from "../engine/deck";
@@ -9,6 +9,8 @@ import type { Card, PlayerId, Suit, Team } from "../engine/types";
 import { sortHandForDisplay } from "../presentation/cards";
 
 type Credentials = { code: string; seatToken: string };
+type JoinAttempt = Credentials & { clientJoinId: string; playerName: string; kind: "create" | "join" };
+type PendingAction = "create" | "join" | "start" | "deal" | "play" | "advanceRound" | "leave";
 type LobbyView = { kind: "lobby"; code: string; viewerPlayerId: string; hostPlayerId: string; players: Array<{ id: string; name: string }> };
 type UnavailableView = { kind: "unavailable"; code: string };
 type GamePlayer = { id: PlayerId; name: string; team: Team; cardCount: number; hand?: Card[] };
@@ -41,6 +43,7 @@ type GameView = {
 type RoomView = LobbyView | UnavailableView | GameView;
 
 const STORAGE_KEY = "dehla-pakad-online-seat-v1";
+const JOIN_ATTEMPT_KEY = "dehla-pakad-join-attempt-v1";
 const newToken = () => `${crypto.randomUUID()}${crypto.randomUUID()}`;
 const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (n) => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[n % 32]).join("");
 const suitSymbol: Record<Suit, string> = { clubs: "♣", diamonds: "♦", hearts: "♥", spades: "♠" };
@@ -48,6 +51,15 @@ const suitName = (suit: Suit | null) => suit ? `${suit[0].toUpperCase()}${suit.s
 type TablePosition = "local" | "left" | "partner" | "right";
 const tablePositions: TablePosition[] = ["local", "left", "partner", "right"];
 type TableMoment = { key: string; kind: "capture" | "carry"; title: string; detail: string };
+const pendingLabels: Record<PendingAction, string> = {
+  create: "Creating table…",
+  join: "Joining table…",
+  start: "Starting match…",
+  deal: "Shuffling and dealing…",
+  play: "Playing card…",
+  advanceRound: "Starting next round…",
+  leave: "Leaving table…",
+};
 
 function DehlaCard({ card, disabled = false, onClick, compact = false, hukum = false, playable = false, unavailable = false }: { card: Card; disabled?: boolean; onClick?: () => void; compact?: boolean; hukum?: boolean; playable?: boolean; unavailable?: boolean }) {
   const red = card.suit === "hearts" || card.suit === "diamonds";
@@ -72,6 +84,14 @@ export default function OnlineDehlaPakadGame() {
   const [showSecondDealEvent, setShowSecondDealEvent] = useState(false);
   const [showPendingLot, setShowPendingLot] = useState(false);
   const [tableMoment, setTableMoment] = useState<TableMoment | null>(null);
+  const [joinAttempt, setJoinAttempt] = useState<JoinAttempt | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [slowPending, setSlowPending] = useState(false);
+  const [backOnline, setBackOnline] = useState(false);
+  const [browserOnline, setBrowserOnline] = useState(true);
+  const pendingActionRef = useRef<PendingAction | null>(null);
+  const resumeAttempted = useRef(false);
+  const wasDisconnected = useRef(false);
   const previousRoundState = useRef<{ revision: number; roundNumber: number; handsCompleted: number; pendingLotCount: number; capturedA: number; capturedB: number } | null>(null);
   const createRoom = useMutation(api.dehlaRooms.create);
   const joinRoom = useMutation(api.dehlaRooms.join);
@@ -80,14 +100,57 @@ export default function OnlineDehlaPakadGame() {
   const play = useMutation(api.dehlaRooms.play);
   const advanceRound = useMutation(api.dehlaRooms.advanceRound);
   const leaveRoom = useMutation(api.dehlaRooms.leave);
+  const connection = useConvexConnectionState();
   const room = useQuery(api.dehlaRooms.view, credentials ? { code: credentials.code, seatToken: credentials.seatToken } : "skip") as RoomView | undefined;
   const hukumEventKey = room?.kind === "game" && room.hukum ? `${room.roundNumber}:${room.hukumHandNumber}:${room.hukum}` : null;
   const secondDealEventKey = room?.kind === "game" && room.phase === "roundPlay" && room.hukum ? `${room.roundNumber}:${room.hukumHandNumber}:second-deal` : null;
 
   useEffect(() => {
-    try { const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as Credentials | null; setCredentials(saved); setRestoredSeat(Boolean(saved)); } catch { /* Ignore damaged local credentials. */ }
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as Credentials | null;
+      const pending = JSON.parse(localStorage.getItem(JOIN_ATTEMPT_KEY) ?? "null") as JoinAttempt | null;
+      setCredentials(saved);
+      setRestoredSeat(Boolean(saved));
+      if (!saved && pending) {
+        setJoinAttempt(pending);
+        setName(pending.playerName);
+        if (pending.kind === "join") setJoinCode(pending.code);
+      }
+    } catch { /* Ignore damaged local credentials. */ }
     setLoaded(true);
   }, []);
+
+  useEffect(() => {
+    const syncBrowserConnection = () => setBrowserOnline(navigator.onLine);
+    syncBrowserConnection();
+    window.addEventListener("online", syncBrowserConnection);
+    window.addEventListener("offline", syncBrowserConnection);
+    return () => {
+      window.removeEventListener("online", syncBrowserConnection);
+      window.removeEventListener("offline", syncBrowserConnection);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!loaded || credentials || !joinAttempt || resumeAttempted.current || !browserOnline || !connection.isWebSocketConnected) return;
+    resumeAttempted.current = true;
+    void submitJoinAttempt(joinAttempt);
+  }, [loaded, credentials, joinAttempt, browserOnline, connection.isWebSocketConnected]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const connected = browserOnline && connection.isWebSocketConnected;
+    if (!connected && connection.hasEverConnected) {
+      wasDisconnected.current = true;
+      setBackOnline(false);
+      return;
+    }
+    if (!connected || !wasDisconnected.current) return;
+    wasDisconnected.current = false;
+    setBackOnline(true);
+    const timer = window.setTimeout(() => setBackOnline(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [loaded, browserOnline, connection.isWebSocketConnected, connection.hasEverConnected]);
 
   useEffect(() => {
     if (!hukumEventKey || restoredSeat) { setShowHukumEvent(false); return; }
@@ -148,30 +211,78 @@ export default function OnlineDehlaPakadGame() {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [showPendingLot]);
 
-  function remember(next: Credentials) { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); setRestoredSeat(false); setCredentials(next); }
-  async function perform(action: () => Promise<unknown>) {
-    try { setError(null); await action(); } catch (cause) { setError(errorMessage(cause)); }
+  function remember(next: Credentials) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    localStorage.removeItem(JOIN_ATTEMPT_KEY);
+    setJoinAttempt(null);
+    setRestoredSeat(false);
+    setCredentials(next);
   }
+  async function perform(kind: PendingAction, action: () => Promise<unknown>) {
+    if (pendingActionRef.current || !browserOnline || !connection.isWebSocketConnected) return;
+    pendingActionRef.current = kind;
+    setPendingAction(kind);
+    setSlowPending(false);
+    setError(null);
+    const slowTimer = window.setTimeout(() => setSlowPending(true), 2500);
+    try { await action(); }
+    catch (cause) { setError(errorMessage(cause)); }
+    finally {
+      window.clearTimeout(slowTimer);
+      pendingActionRef.current = null;
+      setPendingAction(null);
+      setSlowPending(false);
+    }
+  }
+  async function submitJoinAttempt(attempt: JoinAttempt) {
+    await perform(attempt.kind, async () => {
+      const args = { code: attempt.code, playerName: attempt.playerName, seatToken: attempt.seatToken, clientJoinId: attempt.clientJoinId };
+      if (attempt.kind === "create") await createRoom(args);
+      else await joinRoom(args);
+      remember({ code: attempt.code, seatToken: attempt.seatToken });
+    });
+  }
+  function beginJoin(kind: JoinAttempt["kind"]) {
+    if (pendingActionRef.current || !browserOnline || !connection.isWebSocketConnected) return;
+    const code = kind === "create" ? joinAttempt?.kind === "create" ? joinAttempt.code : newCode() : joinCode.trim().toUpperCase();
+    const current = joinAttempt?.kind === kind && joinAttempt.code === code && joinAttempt.playerName === name.trim() ? joinAttempt : null;
+    const attempt = current ?? { kind, code, playerName: name.trim(), seatToken: newToken(), clientJoinId: newToken() };
+    localStorage.setItem(JOIN_ATTEMPT_KEY, JSON.stringify(attempt));
+    setJoinAttempt(attempt);
+    void submitJoinAttempt(attempt);
+  }
+
+  const connectionInterrupted = connection.hasEverConnected && (!browserOnline || !connection.isWebSocketConnected);
+  const connecting = !connection.hasEverConnected && (!browserOnline || !connection.isWebSocketConnected);
+  const authoritativeActionsBlocked = !browserOnline || !connection.isWebSocketConnected || pendingAction !== null;
+  const networkNotice = connectionInterrupted ? "Connection interrupted — reconnecting…" : connecting ? "Connecting to the table…" : backOnline ? "Back online" : null;
+  const actionNotice = pendingAction ? slowPending ? `Still ${pendingLabels[pendingAction].toLowerCase()} Network seems slow.` : pendingLabels[pendingAction] : null;
+  const statusNotices = <>
+    {networkNotice && <p className={`network-status${connectionInterrupted ? " interrupted" : backOnline ? " recovered" : ""}`} role="status" aria-live="polite">{networkNotice}</p>}
+    {actionNotice && <p className="action-status" role="status" aria-live="polite"><span className="action-spinner" aria-hidden="true" />{actionNotice}</p>}
+  </>;
 
   if (!loaded) return <section className="game-panel loading-panel">Preparing the Dehla Pakad table…</section>;
   if (!credentials) return <section className="game-panel lobby-shell dehla-lobby">
+    {statusNotices}
     <div className="lobby-intro"><p className="eyebrow">Partnership card game</p><h1>Dehla Pakad</h1><div className="lobby-facts" aria-label="Four players, two teams, partners sit opposite"><span><strong>4</strong> Players</span><span><strong>2</strong> Teams</span><span><strong>↕</strong> Partners opposite</span></div><p>Create a private table, share its six-character code, and take seats with fixed opposite partners.</p></div>
     <div className="lobby-grid">
-      <section className="lobby-card"><span className="lobby-step">01</span><h2>Create a table</h2><label className="field-label">Your name<input value={name} maxLength={30} placeholder="e.g. Meera" onChange={(event) => setName(event.target.value)} /></label><p className="subtle">You take P1. Partners will sit opposite once all four seats are filled.</p><button disabled={!name.trim()} onClick={() => perform(async () => { const next = { code: newCode(), seatToken: newToken() }; await createRoom({ code: next.code, playerName: name, seatToken: next.seatToken }); remember(next); })}>Create private table</button></section>
-      <section className="lobby-card"><span className="lobby-step">02</span><h2>Join a table</h2><label className="field-label">Room code<input className="code-input" maxLength={6} value={joinCode} placeholder="ABC123" onChange={(event) => setJoinCode(event.target.value.toUpperCase())} /></label><button disabled={!name.trim() || joinCode.trim().length !== 6} onClick={() => perform(async () => { const next = { code: joinCode.trim().toUpperCase(), seatToken: newToken() }; await joinRoom({ code: next.code, playerName: name, seatToken: next.seatToken }); remember(next); })}>Join table</button></section>
+      <section className="lobby-card" aria-busy={pendingAction === "create"}><span className="lobby-step">01</span><h2>Create a table</h2><label className="field-label">Your name<input value={name} maxLength={30} placeholder="e.g. Meera" disabled={pendingAction !== null} onChange={(event) => setName(event.target.value)} /></label><p className="subtle">You take P1. Partners will sit opposite once all four seats are filled.</p><button disabled={!name.trim() || authoritativeActionsBlocked} aria-busy={pendingAction === "create"} onClick={() => beginJoin("create")}>{pendingAction === "create" ? "Creating table…" : joinAttempt?.kind === "create" ? "Retry creating table" : "Create private table"}</button></section>
+      <section className="lobby-card" aria-busy={pendingAction === "join"}><span className="lobby-step">02</span><h2>Join a table</h2><label className="field-label">Room code<input className="code-input" maxLength={6} value={joinCode} placeholder="ABC123" disabled={pendingAction !== null} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} /></label><button disabled={!name.trim() || joinCode.trim().length !== 6 || authoritativeActionsBlocked} aria-busy={pendingAction === "join"} onClick={() => beginJoin("join")}>{pendingAction === "join" ? "Joining table…" : joinAttempt?.kind === "join" ? "Retry joining table" : "Join table"}</button></section>
     </div>{error && <p className="error">{error}</p>}
   </section>;
 
-  if (room === undefined) return <section className="game-panel loading-panel">Taking your seat in {credentials.code}…</section>;
-  if (room.kind === "unavailable") return <section className="game-panel lobby-shell"><p className="eyebrow">Room unavailable</p><h1>{room.code || "Saved room"} cannot be opened</h1><p>It may have expired or belong to another game.</p><button onClick={() => { localStorage.removeItem(STORAGE_KEY); setCredentials(null); }}>Forget saved seat</button></section>;
+  if (room === undefined) return <section className="game-panel loading-panel">{statusNotices}<span>Taking your seat in {credentials.code}…</span></section>;
+  if (room.kind === "unavailable") return <section className="game-panel lobby-shell">{statusNotices}<p className="eyebrow">Room unavailable</p><h1>{room.code || "Saved room"} cannot be opened</h1><p>It may have expired or belong to another game.</p><button onClick={() => { localStorage.removeItem(STORAGE_KEY); setCredentials(null); }}>Forget saved seat</button></section>;
 
   if (room.kind === "lobby") {
     const host = room.viewerPlayerId === room.hostPlayerId;
     return <section className="game-panel waiting-lobby dehla-lobby">
+      {statusNotices}
       <header className="lobby-room-header"><div><p className="eyebrow">Dehla Pakad waiting room</p><h1>Seat all four players</h1></div><button className="room-code-button" onClick={() => navigator.clipboard.writeText(room.code)}><small>Room code · tap to copy</small><strong>{room.code}</strong></button></header>
       <div className="waiting-layout"><section><div className="waiting-heading"><h2>Teams and seats</h2><span>{room.players.length}/4 seated</span></div><div className="lobby-list dehla-seat-preview">{[1, 2, 3, 4].map((seat) => { const player = room.players.find((candidate) => candidate.id === `player-${seat}`); const team = seat % 2 ? "A" : "B"; return <div key={seat} className={`team-${team.toLowerCase()}${player ? " occupied" : " open"}`}><span className="seat-initials">P{seat}</span><span className="preview-copy"><strong>{player?.name ?? "Open seat"}</strong><small>Team {team}{player?.id === room.hostPlayerId ? " · Host" : ""}</small></span><b>{seat === 1 || seat === 3 ? "A partners" : "B partners"}</b></div>; })}</div></section><aside className="lobby-settings"><p className="eyebrow">Partnerships</p><strong>P1 + P3 · Team A</strong><p>P2 + P4 · Team B. Play moves clockwise around the table.</p><div className="partner-map" aria-hidden="true"><span>P3</span><i>↕</i><span>P1</span><span>P2</span><i>↔</i><span>P4</span></div></aside></div>
-      {host ? <div className="lobby-actions"><button disabled={room.players.length !== 4} onClick={() => perform(() => startRoom({ code: room.code, seatToken: credentials.seatToken }))}>Start match · {room.players.length}/4</button>{room.players.length !== 4 && <span className="subtle">All four seats are required.</span>}</div> : <p className="turn-banner waiting"><strong>Waiting for the host</strong></p>}
-      <button className="quiet danger lobby-leave" onClick={() => perform(async () => { await leaveRoom({ code: room.code, seatToken: credentials.seatToken }); localStorage.removeItem(STORAGE_KEY); setCredentials(null); })}>Leave this table</button>{error && <p className="error">{error}</p>}
+      {host ? <div className="lobby-actions"><button disabled={room.players.length !== 4 || authoritativeActionsBlocked} aria-busy={pendingAction === "start"} onClick={() => perform("start", () => startRoom({ code: room.code, seatToken: credentials.seatToken }))}>{pendingAction === "start" ? "Starting match…" : `Start match · ${room.players.length}/4`}</button>{room.players.length !== 4 && <span className="subtle">All four seats are required.</span>}</div> : <p className="turn-banner waiting"><strong>Waiting for the host</strong></p>}
+      <button className="quiet danger lobby-leave" disabled={authoritativeActionsBlocked} aria-busy={pendingAction === "leave"} onClick={() => perform("leave", async () => { await leaveRoom({ code: room.code, seatToken: credentials.seatToken }); localStorage.removeItem(STORAGE_KEY); setCredentials(null); })}>{pendingAction === "leave" ? "Leaving table…" : "Leave this table"}</button>{error && <p className="error">{error}</p>}
     </section>;
   }
 
@@ -196,15 +307,16 @@ export default function OnlineDehlaPakadGame() {
   const streakBlockedByTen = Boolean(room.streakPlayer && room.streakCount >= 2 && room.pendingLotCount > 0 && room.lastTrick?.cards.some(({ card }) => card.rank === 10));
 
   return <section className="dehla-shell">
+    {statusNotices}
     <header className="dehla-header">
       <div className="dehla-title"><p className="eyebrow">Dehla Pakad · Round {room.roundNumber}</p><h1>{phaseLabel}</h1>{room.phase === "playingForHukum" && <small>Hand {Math.min(room.handsCompleted + 1, 5)} of max 5</small>}</div>
       <div className="dehla-header-tools">
-        <div className="game-meta"><span className="meta-chip connection-chip"><small>Connection</small><strong>{restoredSeat ? "Live · restored seat" : "Live · private room"}</strong></span><span className="meta-chip room-chip"><small>Room</small><strong>{room.code}</strong></span><span className="meta-chip"><small>Dealer</small><strong>{nameFor(room.dealer)}</strong></span><span className="meta-chip"><small>Deal</small><strong>Team {room.dealingTeam}</strong></span></div>
+        <div className="game-meta"><span className={`meta-chip connection-chip${connectionInterrupted ? " interrupted" : ""}`}><small>Connection</small><strong>{connectionInterrupted ? "Reconnecting…" : backOnline ? "Back online" : restoredSeat ? "Live · restored seat" : "Live · private room"}</strong></span><span className="meta-chip room-chip"><small>Room</small><strong>{room.code}</strong></span><span className="meta-chip"><small>Dealer</small><strong>{nameFor(room.dealer)}</strong></span><span className="meta-chip"><small>Deal</small><strong>Team {room.dealingTeam}</strong></span></div>
         <div className={`hukum-display${room.hukum ? ` declared suit-${room.hukum}` : ""}`} data-hukum={room.hukum ?? ""} aria-label={`Hukum: ${hukumLabel}`}><small>Hukum</small><strong aria-hidden="true">{room.hukum ? suitSymbol[room.hukum] : "—"}</strong><span>{hukumLabel}</span>{!room.hukum && room.phase === "playingForHukum" && <em>Finding</em>}</div>
       </div>
     </header>
 
-    {room.phase === "awaitingInitialDeal" && <section className={`dealer-stage${isNoHukumRedeal ? " redeal-stage" : ""}`} data-testid="dealer-stage">{isNoHukumRedeal && <div className="redeal-notice" role="status"><strong>No Hukum</strong><span>Redealing with the same dealer…</span></div>}<div><p className="eyebrow">{isFirstDealerSelection ? "Dealer selection" : isNoHukumRedeal ? "No-Hukum redeal" : `Round ${room.roundNumber} dealer`}</p><h2>{isFirstDealerSelection ? `Team ${room.dealerSelection.dealingTeam} lost the draw and deals` : isNoHukumRedeal ? `${nameFor(room.dealer)} deals again` : `Team ${room.dealingTeam} deals · ${nameFor(room.dealer)} is next`}</h2><p>{isFirstDealerSelection ? `Team A ${room.dealerSelection.totals.A} · Team B ${room.dealerSelection.totals.B}${room.dealerSelection.attempts > 1 ? ` · ${room.dealerSelection.attempts - 1} tied draw${room.dealerSelection.attempts === 2 ? "" : "s"} automatically redrawn` : ""}` : isNoHukumRedeal ? "The attempt ended without Hukum after five hands. Captures and standings did not change." : "The match-level standing selected the behind team; its stored alternating dealer sequence selected this dealer."}</p></div>{isFirstDealerSelection && <div className="selection-cards">{room.players.map((player) => <div key={player.id}><DehlaCard compact card={room.dealerSelection.cards[player.id]} disabled /><small>{player.name}</small></div>)}</div>}{room.viewerPlayerId === room.dealer ? <button onClick={() => perform(() => deal({ code: room.code, seatToken: credentials.seatToken, expectedRevision: room.revision }))}>Shuffle and deal five</button> : <p className="turn-banner waiting"><strong>Waiting for {nameFor(room.dealer)} to deal</strong></p>}</section>}
+    {room.phase === "awaitingInitialDeal" && <section className={`dealer-stage${isNoHukumRedeal ? " redeal-stage" : ""}`} data-testid="dealer-stage">{isNoHukumRedeal && <div className="redeal-notice" role="status"><strong>No Hukum</strong><span>Redealing with the same dealer…</span></div>}<div><p className="eyebrow">{isFirstDealerSelection ? "Dealer selection" : isNoHukumRedeal ? "No-Hukum redeal" : `Round ${room.roundNumber} dealer`}</p><h2>{isFirstDealerSelection ? `Team ${room.dealerSelection.dealingTeam} lost the draw and deals` : isNoHukumRedeal ? `${nameFor(room.dealer)} deals again` : `Team ${room.dealingTeam} deals · ${nameFor(room.dealer)} is next`}</h2><p>{isFirstDealerSelection ? `Team A ${room.dealerSelection.totals.A} · Team B ${room.dealerSelection.totals.B}${room.dealerSelection.attempts > 1 ? ` · ${room.dealerSelection.attempts - 1} tied draw${room.dealerSelection.attempts === 2 ? "" : "s"} automatically redrawn` : ""}` : isNoHukumRedeal ? "The attempt ended without Hukum after five hands. Captures and standings did not change." : "The match-level standing selected the behind team; its stored alternating dealer sequence selected this dealer."}</p></div>{isFirstDealerSelection && <div className="selection-cards">{room.players.map((player) => <div key={player.id}><DehlaCard compact card={room.dealerSelection.cards[player.id]} disabled /><small>{player.name}</small></div>)}</div>}{room.viewerPlayerId === room.dealer ? <button disabled={authoritativeActionsBlocked} aria-busy={pendingAction === "deal"} onClick={() => perform("deal", () => deal({ code: room.code, seatToken: credentials.seatToken, expectedRevision: room.revision }))}>{pendingAction === "deal" ? "Shuffling and dealing…" : "Shuffle and deal five"}</button> : <p className="turn-banner waiting"><strong>Waiting for {nameFor(room.dealer)} to deal</strong></p>}</section>}
 
     {room.phase !== "awaitingInitialDeal" && <>
       <div className={`turn-banner ${isTurn ? "your-turn" : "waiting"}`}><span className="turn-symbol" aria-hidden="true">{isTurn ? "◆" : "○"}</span><span><strong>{isTurn ? "Your turn" : `${current?.name ?? "Player"}’s turn`}</strong><small>{leadSuit ? `Lead suit: ${suitName(leadSuit)}` : "Lead any card"}{mustFollow && isTurn ? " · You must follow suit" : ""}</small></span></div>
@@ -239,7 +351,7 @@ export default function OnlineDehlaPakadGame() {
               </div>
             </div>
           </section>
-          <section className={`player-hand dehla-player-hand${isTurn ? " active-hand" : ""}`} data-player-id={room.viewerPlayerId}><div className="hand-title"><div><p className="eyebrow">You · Team {own.team}</p><h2>Your hand <span>({ownHand.length})</span></h2></div><small className="hand-hint">{isTurn ? mustFollow ? `Follow ${suitName(leadSuit)}` : "Choose a card" : `Waiting for ${current?.name ?? "the next player"}`}</small></div><div className={`hand-cards${ownHand.length >= 10 ? " large-hand" : ""}`}>{ownHand.map((card) => { const followsSuit = !mustFollow || card.suit === leadSuit; const legal = isTurn && followsSuit; const unavailable = isTurn && mustFollow && !followsSuit; return <DehlaCard key={card.id} card={card} hukum={room.hukum === card.suit} playable={legal} unavailable={unavailable} disabled={!legal || room.phase === "roundComplete"} onClick={() => perform(() => play({ code: room.code, seatToken: credentials.seatToken, expectedRevision: room.revision, cardId: card.id }))} />; })}</div></section>
+          <section className={`player-hand dehla-player-hand${isTurn ? " active-hand" : ""}`} data-player-id={room.viewerPlayerId} aria-busy={pendingAction === "play"}><div className="hand-title"><div><p className="eyebrow">You · Team {own.team}</p><h2>Your hand <span>({ownHand.length})</span></h2></div><small className="hand-hint">{pendingAction === "play" ? "Playing card…" : isTurn ? mustFollow ? `Follow ${suitName(leadSuit)}` : "Choose a card" : `Waiting for ${current?.name ?? "the next player"}`}</small></div><div className={`hand-cards${ownHand.length >= 10 ? " large-hand" : ""}`}>{ownHand.map((card) => { const followsSuit = !mustFollow || card.suit === leadSuit; const legal = isTurn && followsSuit && !authoritativeActionsBlocked; const unavailable = isTurn && mustFollow && !followsSuit; return <DehlaCard key={card.id} card={card} hukum={room.hukum === card.suit} playable={legal} unavailable={unavailable} disabled={!legal || room.phase === "roundComplete"} onClick={() => perform("play", () => play({ code: room.code, seatToken: credentials.seatToken, expectedRevision: room.revision, cardId: card.id }))} />; })}</div></section>
         </main>
         <aside className="dehla-stats">
           <section className="round-capture"><div className="panel-heading"><p className="eyebrow">Four tens</p><strong>{room.captured.A.tens + room.captured.B.tens}/4 publicly captured</strong></div><div className="tens-score" aria-label={`Team A ${room.captured.A.tens}, Team B ${room.captured.B.tens} captured tens`}><span><small>Team A</small><strong>{room.captured.A.tens}</strong></span><b>{room.captured.A.tens}–{room.captured.B.tens}<small>Tens</small></b><span><small>Team B</small><strong>{room.captured.B.tens}</strong></span></div><div className="tens-track" aria-hidden="true">{tensTrack.map((team, index) => <span key={index} className={team ? `captured team-${team.toLowerCase()}` : ""}><b>10</b><small>{team ?? "—"}</small></span>)}</div><div className="capture-teams"><div className="team-stat team-a"><strong>Team A</strong><span>{room.captured.A.cardCount} captured cards</span></div><div className="team-stat team-b"><strong>Team B</strong><span>{room.captured.B.cardCount} captured cards</span></div></div></section>
@@ -250,7 +362,7 @@ export default function OnlineDehlaPakadGame() {
       </div>
     </>}
 
-    {room.phase === "roundComplete" && room.completedRound && <section className={`round-result dehla-result result-${room.completedRound.resultType}`} role="dialog" aria-modal="true" aria-labelledby="dehla-result-title"><header className="dehla-result-header"><p className="eyebrow">Round {room.roundNumber} complete</p><h2 id="dehla-result-title">{room.completedRound.resultType === "draw" ? "Round drawn" : `Team ${room.completedRound.winningTeam} wins`}</h2><strong className="result-kind">{room.completedRound.resultType === "bavaniya" ? "Bavaniya" : room.completedRound.resultType === "coat" ? "Coat" : room.completedRound.resultType === "draw" ? "Exact 2–2 draw" : "Normal win"}</strong>{room.completedRound.resultType === "bavaniya" && <p>Team {room.completedRound.winningTeam} captured all 52 cards.</p>}{room.completedRound.resultType === "coat" && <p>Team {room.completedRound.winningTeam} captured all four 10s.</p>}</header><div className="result-metrics"><div><small>10s</small><strong>{room.completedRound.tensCaptured.A} <i>—</i> {room.completedRound.tensCaptured.B}</strong><span>A · B</span></div><div><small>Cards</small><strong>{room.completedRound.cardsCaptured.A} <i>—</i> {room.completedRound.cardsCaptured.B}</strong><span>A · B</span></div><div><small>Hukum</small><strong className={room.completedRound.hukum === "hearts" || room.completedRound.hukum === "diamonds" ? "red" : ""}>{suitSymbol[room.completedRound.hukum]}</strong><span>{room.completedRound.hukum}</span></div></div><section className="result-standing"><p className="eyebrow">Net match standing</p><div><span>Bavaniya</span><strong>{room.standings.bavaniyas.A} — {room.standings.bavaniyas.B}</strong><small>A · B</small></div><div><span>Coat</span><strong>{room.standings.coats.A} — {room.standings.coats.B}</strong><small>A · B</small></div><div><span>Cumulative 10s</span><strong>{room.standings.cumulativeTens.A} — {room.standings.cumulativeTens.B}</strong><small>A · B</small></div></section><div className="next-dealer"><span className="seat-initials" aria-hidden="true">P{room.dealer.slice(-1)}</span><span><small>Next dealer · Team {room.dealingTeam}</small><strong>{nameFor(room.dealer)}</strong></span></div><p className="result-context">Hukum declared by {nameFor(room.completedRound.hukumDeclarer)} on hand {room.completedRound.hukumHandNumber}. Round dealer: {nameFor(room.completedRound.dealer)} · Team {room.completedRound.dealingTeam}.</p>{isHost ? <button autoFocus onClick={() => perform(() => advanceRound({ code: room.code, seatToken: credentials.seatToken, expectedRevision: room.revision }))}>Prepare next round</button> : <p className="result-waiting-copy">Waiting for the host to continue…</p>}</section>}
+    {room.phase === "roundComplete" && room.completedRound && <section className={`round-result dehla-result result-${room.completedRound.resultType}`} role="dialog" aria-modal="true" aria-labelledby="dehla-result-title"><header className="dehla-result-header"><p className="eyebrow">Round {room.roundNumber} complete</p><h2 id="dehla-result-title">{room.completedRound.resultType === "draw" ? "Round drawn" : `Team ${room.completedRound.winningTeam} wins`}</h2><strong className="result-kind">{room.completedRound.resultType === "bavaniya" ? "Bavaniya" : room.completedRound.resultType === "coat" ? "Coat" : room.completedRound.resultType === "draw" ? "Exact 2–2 draw" : "Normal win"}</strong>{room.completedRound.resultType === "bavaniya" && <p>Team {room.completedRound.winningTeam} captured all 52 cards.</p>}{room.completedRound.resultType === "coat" && <p>Team {room.completedRound.winningTeam} captured all four 10s.</p>}</header><div className="result-metrics"><div><small>10s</small><strong>{room.completedRound.tensCaptured.A} <i>—</i> {room.completedRound.tensCaptured.B}</strong><span>A · B</span></div><div><small>Cards</small><strong>{room.completedRound.cardsCaptured.A} <i>—</i> {room.completedRound.cardsCaptured.B}</strong><span>A · B</span></div><div><small>Hukum</small><strong className={room.completedRound.hukum === "hearts" || room.completedRound.hukum === "diamonds" ? "red" : ""}>{suitSymbol[room.completedRound.hukum]}</strong><span>{room.completedRound.hukum}</span></div></div><section className="result-standing"><p className="eyebrow">Net match standing</p><div><span>Bavaniya</span><strong>{room.standings.bavaniyas.A} — {room.standings.bavaniyas.B}</strong><small>A · B</small></div><div><span>Coat</span><strong>{room.standings.coats.A} — {room.standings.coats.B}</strong><small>A · B</small></div><div><span>Cumulative 10s</span><strong>{room.standings.cumulativeTens.A} — {room.standings.cumulativeTens.B}</strong><small>A · B</small></div></section><div className="next-dealer"><span className="seat-initials" aria-hidden="true">P{room.dealer.slice(-1)}</span><span><small>Next dealer · Team {room.dealingTeam}</small><strong>{nameFor(room.dealer)}</strong></span></div><p className="result-context">Hukum declared by {nameFor(room.completedRound.hukumDeclarer)} on hand {room.completedRound.hukumHandNumber}. Round dealer: {nameFor(room.completedRound.dealer)} · Team {room.completedRound.dealingTeam}.</p>{isHost ? <button autoFocus disabled={authoritativeActionsBlocked} aria-busy={pendingAction === "advanceRound"} onClick={() => perform("advanceRound", () => advanceRound({ code: room.code, seatToken: credentials.seatToken, expectedRevision: room.revision }))}>{pendingAction === "advanceRound" ? "Starting next round…" : "Prepare next round"}</button> : <p className="result-waiting-copy">Waiting for the host to continue…</p>}</section>}
     {showPendingLot && <div className="pending-lot-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setShowPendingLot(false); }}>
       <section id="pending-lot-dialog" className="pending-lot-dialog" role="dialog" aria-modal="true" aria-labelledby="pending-lot-title">
         <header><div><p className="eyebrow">Public cards</p><h2 id="pending-lot-title">Pending lot · {room.pendingLotCount} cards</h2></div><button type="button" className="quiet" autoFocus onClick={() => setShowPendingLot(false)} aria-label="Close pending lot">Close</button></header>

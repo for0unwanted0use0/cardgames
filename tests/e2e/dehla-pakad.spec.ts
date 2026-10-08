@@ -242,6 +242,69 @@ async function establishHukum(pages: Page[], capture: Capture) {
   expect(sawFollowSuitRestriction).toBe(true);
 }
 
+test("a slow refreshed join reuses one logical seat and reconnects", async ({ browser }) => {
+  test.setTimeout(120_000);
+  const hostContext = await browser.newContext();
+  const joinContext = await browser.newContext();
+  try {
+    const host = await hostContext.newPage();
+    const joiner = await joinContext.newPage();
+    await Promise.all([host.goto("/games/dehla-pakad"), joiner.goto("/games/dehla-pakad")]);
+
+    await host.getByLabel("Your name").fill("Host");
+    await host.getByRole("button", { name: "Create private table" }).click();
+    const code = (await host.locator(".room-code-button strong").textContent())?.trim();
+    if (!code) throw new Error("Room code was not shown.");
+
+    await joiner.getByLabel("Your name").fill("P2");
+    await joiner.getByLabel("Room code").fill(code);
+    const cdp = await joinContext.newCDPSession(joiner);
+    await cdp.send("Network.enable");
+    await cdp.send("Network.emulateNetworkConditions", {
+      offline: false,
+      latency: 1800,
+      downloadThroughput: 64 * 1024,
+      uploadThroughput: 32 * 1024,
+      connectionType: "cellular3g",
+    });
+
+    await joiner.getByRole("button", { name: "Join table" }).evaluate((button: HTMLButtonElement) => {
+      button.click();
+      button.click();
+      button.click();
+    });
+    await expect(joiner.getByRole("button", { name: "Joining table…" })).toBeDisabled();
+    await expect(joiner.getByRole("status")).toContainText(/Joining table|Still joining/);
+    const pendingAttempt = await joiner.evaluate(() => localStorage.getItem("dehla-pakad-join-attempt-v1"));
+    expect(pendingAttempt).toContain('"clientJoinId"');
+
+    await joiner.reload();
+    await expect(joiner.getByRole("heading", { name: "Seat all four players" })).toBeVisible({ timeout: 30_000 });
+    await expect(host.locator(".dehla-seat-preview .occupied")).toHaveCount(2);
+    await expect(host.locator(".dehla-seat-preview .occupied").filter({ hasText: "P2" })).toHaveCount(1);
+    expect(await joiner.evaluate(() => localStorage.getItem("dehla-pakad-join-attempt-v1"))).toBeNull();
+    const seatBeforeReconnect = await joiner.evaluate(() => localStorage.getItem("dehla-pakad-online-seat-v1"));
+
+    await cdp.send("Network.emulateNetworkConditions", {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+      connectionType: "wifi",
+    });
+    await cdp.detach();
+    await joinContext.setOffline(true);
+    await expect(joiner.getByRole("status")).toContainText("Connection interrupted — reconnecting…", { timeout: 20_000 });
+    await expect(joiner.getByRole("button", { name: "Leave this table" })).toBeDisabled();
+    await joinContext.setOffline(false);
+    await expect(joiner.getByRole("status")).toContainText("Back online", { timeout: 20_000 });
+    await expect(joiner.getByRole("heading", { name: "Seat all four players" })).toBeVisible();
+    expect(await joiner.evaluate(() => localStorage.getItem("dehla-pakad-online-seat-v1"))).toBe(seatBeforeReconnect);
+  } finally {
+    await Promise.allSettled([hostContext.close(), joinContext.close()]);
+  }
+});
+
 test("four private sessions complete a Dehla Pakad round and reconnect safely", async ({ browser }, testInfo) => {
   test.setTimeout(300_000);
   const contexts: BrowserContext[] = [];

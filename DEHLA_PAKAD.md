@@ -60,6 +60,33 @@ The local hand is sorted only at render time in Spades, Hearts, Diamonds, Clubs 
 
 ## Privacy and replay safety
 
+### Join idempotency and network recovery
+
+Creating or joining a room is an explicit idempotent operation. Before the browser sends either mutation it generates and stores two independent high-entropy values: the private seat capability and a `clientJoinId` identifying that logical create/join attempt. The pending attempt is written to local storage before network I/O. Double clicks, retries, a lost response, and a refresh therefore resend the same identifiers.
+
+The server indexes seats by `(roomId, clientJoinId)` and resolves that identity before room-status or room-capacity checks. A retry with the matching private capability returns the original seat; it never allocates another seat. Reusing a join identifier with a different capability is rejected and does not reveal the existing credential. Because Convex mutations are serializable transactions, concurrent claims of the same indexed identity converge on one insert. Different clients remain distinct even when they choose the same display name, while clients racing for a final seat serialize so that exactly one succeeds.
+
+`clientJoinId` is optional in the schema and mutation arguments for rolling compatibility with older deployed clients. New clients always send it. Existing capability tokens are also treated idempotently, so an older client retrying the exact same token recovers its seat.
+
+The Dehla UI uses one mutation lifecycle lock for create, join, start, deal, play, next round, and leave. Controls expose pending labels and `aria-busy`, a live status appears immediately, and unusually slow requests escalate their wording without generating another operation identity. Browser-offline and confirmed Convex disconnection are shown separately from a slow request; authoritative controls lock while either transport signal is disconnected, the saved seat remains intact, and the reactive query restores current server state after reconnection.
+
+| Operation | Duplicate-safety class | Authoritative protection |
+| --- | --- | --- |
+| Create room | Explicitly idempotent | Room plus `clientJoinId`/capability lookup returns the original host seat |
+| Join room | Explicitly idempotent | Indexed `clientJoinId` lookup returns exactly one matching seat |
+| Start match | Naturally state-gated | Only a `waiting` room can transition; concurrent mutations serialize |
+| Initial deal / no-Hukum redeal | Revision protected | Only the current game revision and dealer can deal |
+| Card play / Hukum declaration / automatic second deal | Revision protected | One accepted play increments revision; the second deal is atomic with that play |
+| Lot collection / Hand 13 / round result / standings / dealer transition | Revision protected | These effects are atomic consequences of the accepted card mutation |
+| Next round | Revision protected | Host capability, round-complete phase, and current revision are required |
+| Reconnect | Naturally idempotent | Read-only projection by the same saved seat capability |
+
+The shared LiveKit panel already distinguished connecting, reconnecting, failure, and connected states. Its asynchronous controls now also use a synchronous local lock so rapid clicks cannot issue parallel token or microphone requests.
+
+### Declare audit
+
+Declare has partial protection but retains the same UX weakness. Its server returns an existing seat when the exact same capability token is retried, rejects duplicate names, state-gates Start, and revision-protects gameplay and next-round actions. Its current browser, however, creates a new token inside every Join click and has no mutation pending lock or connection banner. Repeated same-name joins are normally rejected rather than duplicated because the server enforces name uniqueness, but lost-response recovery and slow-network feedback are weaker than Dehla. This sprint does not refactor Declare gameplay; a follow-up can adopt the Dehla join-attempt and action-state pattern deliberately.
+
 - Only the viewer's unplayed hand is present in the projected Convex response and rendered hand. Opponents expose card counts only. The sole card-identity exception is the shared pending lot, whose cards, players, play order, winner, and team are already public.
 - `undealt`, the full authoritative state, other hands, and other seat tokens are never returned.
 - Capability tokens authorize every query and mutation; invalid tokens receive no room data and cannot act.

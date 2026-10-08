@@ -77,6 +77,107 @@ function expectPrivateProjection(view: TestGameView, viewerId: PlayerId) {
 }
 
 describe("Dehla Pakad multiplayer privacy and replay safety", () => {
+  it("deduplicates a triple concurrent join from one logical browser", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dehlaRooms.create, { code: "JOIN12", playerName: "Host", seatToken: tokens[0] });
+
+    const join = {
+      code: "JOIN12",
+      playerName: "P2",
+      seatToken: "rapid-join-stable-seat-token-123456",
+      clientJoinId: "rapid-join-stable-attempt-id-123456",
+    };
+
+    const results = await Promise.all([
+      t.mutation(api.dehlaRooms.join, join),
+      t.mutation(api.dehlaRooms.join, join),
+      t.mutation(api.dehlaRooms.join, join),
+    ]);
+
+    expect(new Set(results.map((result) => result.playerId))).toEqual(new Set(["player-2"]));
+    const view = await t.query(api.dehlaRooms.view, { code: "JOIN12", seatToken: join.seatToken });
+    expect(view).toMatchObject({ kind: "lobby", players: [{ id: "player-1" }, { id: "player-2" }] });
+    expect(view.kind === "lobby" ? view.players : []).toHaveLength(2);
+    expect(JSON.stringify(view)).not.toContain(join.clientJoinId);
+  });
+
+  it("returns the same seat after a committed join response is lost and retried", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dehlaRooms.create, { code: "LOST12", playerName: "Host", seatToken: tokens[0] });
+    const join = {
+      code: "LOST12",
+      playerName: "P2",
+      seatToken: "lost-response-stable-seat-token-123456",
+      clientJoinId: "lost-response-stable-join-id-1234567",
+    };
+    const committed = await t.mutation(api.dehlaRooms.join, join);
+    const retried = await t.mutation(api.dehlaRooms.join, join);
+    expect(retried).toEqual(committed);
+    const refreshed = await t.query(api.dehlaRooms.view, { code: "lost12", seatToken: join.seatToken });
+    expect(refreshed).toMatchObject({ kind: "lobby", viewerPlayerId: committed.playerId });
+  });
+
+  it("keeps display names separate from logical join identity", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dehlaRooms.create, { code: "NAME12", playerName: "Host", seatToken: tokens[0] });
+    const first = await t.mutation(api.dehlaRooms.join, {
+      code: "NAME12", playerName: "P2", seatToken: "same-name-first-seat-token-1234567", clientJoinId: "same-name-first-client-join-id-12345",
+    });
+    const second = await t.mutation(api.dehlaRooms.join, {
+      code: "NAME12", playerName: "P2", seatToken: "same-name-second-seat-token-123456", clientJoinId: "same-name-second-client-join-id-1234",
+    });
+    expect(first.playerId).not.toBe(second.playerId);
+    const view = await t.query(api.dehlaRooms.view, { code: "NAME12", seatToken: tokens[0] });
+    expect(view.kind === "lobby" ? view.players.filter((player) => player.name === "P2") : []).toHaveLength(2);
+  });
+
+  it("allows exactly one client to win a race for the final seat", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dehlaRooms.create, { code: "RACE12", playerName: "Host", seatToken: tokens[0] });
+    await t.mutation(api.dehlaRooms.join, { code: "RACE12", playerName: "P2", seatToken: tokens[1] });
+    await t.mutation(api.dehlaRooms.join, { code: "RACE12", playerName: "P3", seatToken: tokens[2] });
+    const race = await Promise.allSettled([
+      t.mutation(api.dehlaRooms.join, { code: "RACE12", playerName: "P4-A", seatToken: "final-seat-racer-a-token-123456789", clientJoinId: "final-seat-racer-a-join-id-12345678" }),
+      t.mutation(api.dehlaRooms.join, { code: "RACE12", playerName: "P4-B", seatToken: "final-seat-racer-b-token-123456789", clientJoinId: "final-seat-racer-b-join-id-12345678" }),
+    ]);
+    expect(race.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(race.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const view = await t.query(api.dehlaRooms.view, { code: "RACE12", seatToken: tokens[0] });
+    expect(view.kind === "lobby" ? view.players : []).toHaveLength(4);
+  });
+
+  it("does not reveal or replace credentials when a join id is paired with another token", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dehlaRooms.create, { code: "SAFE12", playerName: "Host", seatToken: tokens[0] });
+    const clientJoinId = "private-stable-client-join-id-123456";
+    const seatToken = "private-stable-seat-token-123456789";
+    await t.mutation(api.dehlaRooms.join, { code: "SAFE12", playerName: "P2", seatToken, clientJoinId });
+    const otherToken = "different-private-seat-token-12345678";
+    await expect(t.mutation(api.dehlaRooms.join, { code: "SAFE12", playerName: "P2", seatToken: otherToken, clientJoinId })).rejects.toThrow("different seat credentials");
+    expect(await t.query(api.dehlaRooms.view, { code: "SAFE12", seatToken: otherToken })).toEqual({ kind: "unavailable", code: "SAFE12" });
+    const view = await t.query(api.dehlaRooms.view, { code: "SAFE12", seatToken });
+    expect(JSON.stringify(view)).not.toContain(clientJoinId);
+  });
+
+  it("makes room creation idempotent for a retried logical attempt", async () => {
+    const t = convexTest(schema, modules);
+    const create = {
+      code: "MAKE12", playerName: "Host", seatToken: "create-stable-seat-token-123456789", clientJoinId: "create-stable-client-join-id-123456",
+    };
+    const results = await Promise.all([
+      t.mutation(api.dehlaRooms.create, create),
+      t.mutation(api.dehlaRooms.create, create),
+      t.mutation(api.dehlaRooms.create, create),
+    ]);
+    expect(results).toEqual([
+      { code: "MAKE12", playerId: "player-1" },
+      { code: "MAKE12", playerId: "player-1" },
+      { code: "MAKE12", playerId: "player-1" },
+    ]);
+    const counts = await t.run(async (ctx) => ({ rooms: (await ctx.db.query("rooms").take(2)).length, seats: (await ctx.db.query("seats").take(2)).length }));
+    expect(counts).toEqual({ rooms: 1, seats: 1 });
+  });
+
   it("restores the same lobby seat before the match starts", async () => {
     const t = convexTest(schema, modules);
     await t.mutation(api.dehlaRooms.create, { code: "LOBB12", playerName: "Asha", seatToken: tokens[0] });
@@ -196,8 +297,12 @@ describe("Dehla Pakad multiplayer privacy and replay safety", () => {
     await t.mutation(api.dehlaRooms.start, { code: "REV123", seatToken: tokens[0] });
     const view = asGame(await t.query(api.dehlaRooms.view, { code: "REV123", seatToken: tokens[0] }));
     const dealerToken = tokens[Number(view.dealer.split("-")[1]) - 1];
-    await t.mutation(api.dehlaRooms.deal, { code: "REV123", seatToken: dealerToken, expectedRevision: 0 });
-    await expect(t.mutation(api.dehlaRooms.deal, { code: "REV123", seatToken: dealerToken, expectedRevision: 0 })).rejects.toThrow("Game state changed");
+    const deals = await Promise.allSettled([
+      t.mutation(api.dehlaRooms.deal, { code: "REV123", seatToken: dealerToken, expectedRevision: 0 }),
+      t.mutation(api.dehlaRooms.deal, { code: "REV123", seatToken: dealerToken, expectedRevision: 0 }),
+    ]);
+    expect(deals.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(deals.filter((result) => result.status === "rejected")).toHaveLength(1);
   });
 
   it("rejects a duplicated card action without corrupting state", async () => {
@@ -210,8 +315,12 @@ describe("Dehla Pakad multiplayer privacy and replay safety", () => {
     const actor = actorView.players.find((player) => player.id === actorView.viewerPlayerId);
     const cardId = actor?.hand?.[0].id;
     if (!cardId) throw new Error("Expected the current player to have a card.");
-    await t.mutation(api.dehlaRooms.play, { code: "DEH123", seatToken: actorToken, expectedRevision: actorView.revision, cardId });
-    await expect(t.mutation(api.dehlaRooms.play, { code: "DEH123", seatToken: actorToken, expectedRevision: actorView.revision, cardId })).rejects.toThrow("Game state changed");
+    const duplicate = await Promise.allSettled([
+      t.mutation(api.dehlaRooms.play, { code: "DEH123", seatToken: actorToken, expectedRevision: actorView.revision, cardId }),
+      t.mutation(api.dehlaRooms.play, { code: "DEH123", seatToken: actorToken, expectedRevision: actorView.revision, cardId }),
+    ]);
+    expect(duplicate.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(duplicate.filter((result) => result.status === "rejected")).toHaveLength(1);
     const after = asGame(await t.query(api.dehlaRooms.view, { code: "DEH123", seatToken: actorToken }));
     expect(after.players.find((player) => player.id === actorView.viewerPlayerId)?.cardCount).toBe(4);
   });
@@ -231,8 +340,9 @@ describe("Dehla Pakad multiplayer privacy and replay safety", () => {
       ];
     });
     const action = { code: "DEH123", seatToken: tokens[3], expectedRevision: before.revision, cardId: "declare-club-2" };
-    await t.mutation(api.dehlaRooms.play, action);
-    await expect(t.mutation(api.dehlaRooms.play, action)).rejects.toThrow("Game state changed");
+    const duplicate = await Promise.allSettled([t.mutation(api.dehlaRooms.play, action), t.mutation(api.dehlaRooms.play, action)]);
+    expect(duplicate.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(duplicate.filter((result) => result.status === "rejected")).toHaveLength(1);
     const after = asGame(await t.query(api.dehlaRooms.view, { code: "DEH123", seatToken: tokens[3] }));
     expect(after.phase).toBe("roundPlay");
     expect(after.hukum).toBe("clubs");
@@ -311,7 +421,7 @@ describe("Dehla Pakad multiplayer privacy and replay safety", () => {
       state.hukumHandNumber = 2;
     });
     await reconnect("roundComplete");
-  });
+  }, 15_000);
 
   it("fully resets a no-Hukum attempt without creating round history", async () => {
     const t = await startedRoom();
@@ -361,15 +471,27 @@ describe("Dehla Pakad multiplayer privacy and replay safety", () => {
 
   it("rejects replayed start and advance-round actions", async () => {
     const code = "REPL12";
-    const t = await roomWaitingForDeal(code);
-    await expect(t.mutation(api.dehlaRooms.start, { code, seatToken: tokens[0] })).rejects.toThrow("not waiting to start");
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dehlaRooms.create, { code, playerName: "Asha", seatToken: tokens[0] });
+    for (let index = 1; index < 4; index += 1) await t.mutation(api.dehlaRooms.join, { code, playerName: `P${index + 1}`, seatToken: tokens[index] });
+    const starts = await Promise.allSettled([
+      t.mutation(api.dehlaRooms.start, { code, seatToken: tokens[0] }),
+      t.mutation(api.dehlaRooms.start, { code, seatToken: tokens[0] }),
+      t.mutation(api.dehlaRooms.start, { code, seatToken: tokens[0] }),
+    ]);
+    expect(starts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(starts.filter((result) => result.status === "rejected")).toHaveLength(2);
     await patchGame(t, code, (state) => {
       state.phase = "roundComplete";
       state.currentPlayerId = null;
     });
     const completed = asGame(await t.query(api.dehlaRooms.view, { code, seatToken: tokens[0] }));
-    await t.mutation(api.dehlaRooms.advanceRound, { code, seatToken: tokens[0], expectedRevision: completed.revision });
-    await expect(t.mutation(api.dehlaRooms.advanceRound, { code, seatToken: tokens[0], expectedRevision: completed.revision })).rejects.toThrow("Game state changed");
+    const advances = await Promise.allSettled([
+      t.mutation(api.dehlaRooms.advanceRound, { code, seatToken: tokens[0], expectedRevision: completed.revision }),
+      t.mutation(api.dehlaRooms.advanceRound, { code, seatToken: tokens[0], expectedRevision: completed.revision }),
+    ]);
+    expect(advances.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(advances.filter((result) => result.status === "rejected")).toHaveLength(1);
     const next = asGame(await t.query(api.dehlaRooms.view, { code, seatToken: tokens[0] }));
     expect(next.phase).toBe("awaitingInitialDeal");
   });

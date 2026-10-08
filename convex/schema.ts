@@ -19,10 +19,12 @@ export default defineSchema({
     playerId: v.string(),
     name: v.string(),
     token: v.string(),
+    clientJoinId: v.optional(v.string()),
     joinedAt: v.number(),
   })
     .index("by_room", ["roomId"])
-    .index("by_room_token", ["roomId", "token"]),
+    .index("by_room_token", ["roomId", "token"])
+    .index("by_room_and_clientJoinId", ["roomId", "clientJoinId"]),
   dehlaGames: defineTable({
     roomId: v.id("rooms"),
     revision: v.number(),

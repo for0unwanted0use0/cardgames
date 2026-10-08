@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { createMatch, dealInitial, playCard, startNextRound } from "../src/games/dehla-pakad/engine/state";
 import { countTens } from "../src/games/dehla-pakad/engine/rules";
 import { teamForPlayer, type DehlaGameState, type PlayerId } from "../src/games/dehla-pakad/engine/types";
@@ -20,6 +21,31 @@ function validName(name: string) {
 function validToken(token: string) {
   if (token.length < 24 || token.length > 200) throw new ConvexError("Invalid seat token.");
   return token;
+}
+
+function validClientJoinId(clientJoinId: string) {
+  if (clientJoinId.length < 24 || clientJoinId.length > 200) throw new ConvexError("Invalid join attempt identifier.");
+  return clientJoinId;
+}
+
+async function existingSeatForJoin(
+  ctx: MutationCtx,
+  roomId: Id<"rooms">,
+  clientJoinId: string,
+  token: string,
+) {
+  const byJoinId = await ctx.db
+    .query("seats")
+    .withIndex("by_room_and_clientJoinId", (q) => q.eq("roomId", roomId).eq("clientJoinId", clientJoinId))
+    .unique();
+  if (byJoinId) {
+    if (byJoinId.token !== token) throw new ConvexError("This join attempt belongs to different seat credentials.");
+    return byJoinId;
+  }
+  return await ctx.db
+    .query("seats")
+    .withIndex("by_room_token", (q) => q.eq("roomId", roomId).eq("token", token))
+    .unique();
 }
 
 function publicPendingLotHands(state: DehlaGameState) {
@@ -97,14 +123,20 @@ function playerView(state: DehlaGameState, viewerId: PlayerId, revision: number)
 }
 
 export const create = mutation({
-  args: { code: v.string(), playerName: v.string(), seatToken: v.string() },
+  args: { code: v.string(), playerName: v.string(), seatToken: v.string(), clientJoinId: v.optional(v.string()) },
   returns: v.object({ code: v.string(), playerId: v.string() }),
   handler: async (ctx, args) => {
     const code = normalizedCode(args.code);
     const name = validName(args.playerName);
     const token = validToken(args.seatToken);
+    const clientJoinId = validClientJoinId(args.clientJoinId ?? token);
     const existing = await ctx.db.query("rooms").withIndex("by_code", (q) => q.eq("code", code)).unique();
-    if (existing) throw new ConvexError("That room code is already in use.");
+    if (existing) {
+      if (existing.gameType !== "dehla-pakad") throw new ConvexError("That room code is already in use.");
+      const existingSeat = await existingSeatForJoin(ctx, existing._id, clientJoinId, token);
+      if (existingSeat) return { code, playerId: existingSeat.playerId };
+      throw new ConvexError("That room code is already in use.");
+    }
     const roomId = await ctx.db.insert("rooms", {
       code,
       gameType: "dehla-pakad",
@@ -113,28 +145,30 @@ export const create = mutation({
       revision: 0,
       createdAt: Date.now(),
     });
-    await ctx.db.insert("seats", { roomId, playerId: "player-1", name, token, joinedAt: Date.now() });
+    await ctx.db.insert("seats", { roomId, playerId: "player-1", name, token, clientJoinId, joinedAt: Date.now() });
     return { code, playerId: "player-1" };
   },
 });
 
 export const join = mutation({
-  args: { code: v.string(), playerName: v.string(), seatToken: v.string() },
+  args: { code: v.string(), playerName: v.string(), seatToken: v.string(), clientJoinId: v.optional(v.string()) },
   returns: v.object({ code: v.string(), playerId: v.string() }),
   handler: async (ctx, args) => {
     const code = normalizedCode(args.code);
     const name = validName(args.playerName);
     const token = validToken(args.seatToken);
+    const clientJoinId = validClientJoinId(args.clientJoinId ?? token);
     const room = await ctx.db.query("rooms").withIndex("by_code", (q) => q.eq("code", code)).unique();
     if (!room || room.gameType !== "dehla-pakad") throw new ConvexError("Dehla Pakad room not found.");
+    const existingSeat = await existingSeatForJoin(ctx, room._id, clientJoinId, token);
+    if (existingSeat) return { code, playerId: existingSeat.playerId };
     if (room.status !== "waiting") throw new ConvexError("This game has already started.");
     const seats = await ctx.db.query("seats").withIndex("by_room", (q) => q.eq("roomId", room._id)).take(5);
     if (seats.length >= 4) throw new ConvexError("This table already has four players.");
-    if (seats.some((seat) => seat.token === token)) throw new ConvexError("This device already has a seat.");
     const openNumber = [1, 2, 3, 4].find((number) => !seats.some((seat) => seat.playerId === `player-${number}`));
     if (!openNumber) throw new ConvexError("No seat is available.");
     const playerId = `player-${openNumber}`;
-    await ctx.db.insert("seats", { roomId: room._id, playerId, name, token, joinedAt: Date.now() });
+    await ctx.db.insert("seats", { roomId: room._id, playerId, name, token, clientJoinId, joinedAt: Date.now() });
     return { code, playerId };
   },
 });

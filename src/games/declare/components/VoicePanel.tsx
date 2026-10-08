@@ -35,7 +35,20 @@ export default function VoicePanel({ roomCode, seatToken }: VoicePanelProps) {
   const [participants, setParticipants] = useState<VoiceParticipant[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const leavingRef = useRef(false);
+
+  function beginBusy() {
+    if (busyRef.current) return false;
+    busyRef.current = true;
+    setBusy(true);
+    return true;
+  }
+
+  function endBusy() {
+    busyRef.current = false;
+    setBusy(false);
+  }
 
   const refreshParticipants = useCallback(() => {
     if (room.state === ConnectionState.Disconnected) return setParticipants([]);
@@ -79,8 +92,7 @@ export default function VoicePanel({ roomCode, seatToken }: VoicePanelProps) {
   }, [refreshParticipants, room]);
 
   async function joinVoice() {
-    if (busy || room.state !== ConnectionState.Disconnected) return;
-    setBusy(true);
+    if (room.state !== ConnectionState.Disconnected || !beginBusy()) return;
     setError("");
     setPhase("connecting");
     leavingRef.current = false;
@@ -106,13 +118,12 @@ export default function VoicePanel({ roomCode, seatToken }: VoicePanelProps) {
       setError(microphoneErrorMessage(joinError));
       setPhase("error");
     } finally {
-      setBusy(false);
+      endBusy();
     }
   }
 
   async function toggleMute() {
-    if (busy || phase !== "connected") return;
-    setBusy(true);
+    if (phase !== "connected" || !beginBusy()) return;
     setError("");
     try {
       await room.localParticipant.setMicrophoneEnabled(!room.localParticipant.isMicrophoneEnabled);
@@ -120,20 +131,19 @@ export default function VoicePanel({ roomCode, seatToken }: VoicePanelProps) {
     } catch (muteError) {
       setError(microphoneErrorMessage(muteError));
     } finally {
-      setBusy(false);
+      endBusy();
     }
   }
 
   async function leaveVoice() {
-    if (busy) return;
-    setBusy(true);
+    if (!beginBusy()) return;
     leavingRef.current = true;
     await room.disconnect(true).catch(() => undefined);
     setParticipants([]);
     setError("");
     setPhase("disconnected");
     leavingRef.current = false;
-    setBusy(false);
+    endBusy();
   }
 
   const connected = phase === "connected" || phase === "reconnecting";
@@ -141,8 +151,8 @@ export default function VoicePanel({ roomCode, seatToken }: VoicePanelProps) {
 
   return <details className="voice-panel" aria-label="Optional room voice">
     <summary className="voice-heading"><span><i className={`voice-dot ${connected ? "online" : ""}`} aria-hidden="true" />Voice{connected ? ` · ${participants.length}` : ""}</span><small>{phase === "connecting" ? "Connecting…" : phase === "reconnecting" ? "Reconnecting…" : phase === "connected" ? "Connected" : phase === "error" ? "Unavailable" : "Optional"}</small></summary>
-    {!connected && phase !== "connecting" && <button className="voice-join" disabled={busy} onClick={joinVoice}>{phase === "error" ? "Try Again" : "Join Voice"}</button>}
-    {phase === "connecting" && <p className="subtle voice-status">Requesting secure voice access…</p>}
+    {!connected && phase !== "connecting" && <button className="voice-join" disabled={busy} aria-busy={busy} onClick={joinVoice}>{phase === "error" ? "Try Again" : "Join Voice"}</button>}
+    {phase === "connecting" && <p className="subtle voice-status" role="status">Requesting secure voice access…</p>}
     {connected && <>
       <div className="voice-participants">{participants.map((participant) => <div key={participant.identity}>
         <span>{participant.name}{participant.isLocal ? " (you)" : ""}</span>
